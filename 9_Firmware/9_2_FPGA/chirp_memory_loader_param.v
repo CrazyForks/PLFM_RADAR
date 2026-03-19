@@ -103,44 +103,50 @@ initial begin
 end
 
 // Memory access logic
-reg [11:0] long_addr;
+// long_addr is combinational — segment_select[1:0] concatenated with sample_addr[9:0]
+wire [11:0] long_addr = {segment_select, sample_addr};
 
-always @(posedge clk or negedge reset_n) begin
+// ---- BRAM read block (sync-only, sync reset) ----
+// REQP-1839/1840 fix: BRAM output registers cannot have async resets.
+// We use a synchronous reset instead, which Vivado maps to the BRAM
+// RSTREGB port (supported by 7-series BRAM primitives).
+always @(posedge clk) begin
     if (!reset_n) begin
         ref_i <= 16'd0;
         ref_q <= 16'd0;
+    end else if (mem_request) begin
+        if (use_long_chirp) begin
+            ref_i <= long_chirp_i[long_addr];
+            ref_q <= long_chirp_q[long_addr];
+            
+            `ifdef SIMULATION
+            if (DEBUG && $time < 100) begin
+                $display("[MEM @%0t] Long chirp: seg=%b, addr=%d, I=%h, Q=%h",
+                        $time, segment_select, long_addr,
+                        long_chirp_i[long_addr], long_chirp_q[long_addr]);
+            end
+            `endif
+        end else begin
+            // Short chirp (0-1023)
+            ref_i <= short_chirp_i[sample_addr];
+            ref_q <= short_chirp_q[sample_addr];
+            
+            `ifdef SIMULATION
+            if (DEBUG && $time < 100) begin
+                $display("[MEM @%0t] Short chirp: addr=%d, I=%h, Q=%h",
+                        $time, sample_addr, short_chirp_i[sample_addr], short_chirp_q[sample_addr]);
+            end
+            `endif
+        end
+    end
+end
+
+// ---- Control block (async reset for mem_ready only) ----
+always @(posedge clk or negedge reset_n) begin
+    if (!reset_n) begin
         mem_ready <= 1'b0;
     end else begin
-        if (mem_request) begin
-            if (use_long_chirp) begin
-                // Direct addressing for 4 segments
-                long_addr = {segment_select, sample_addr};  // segment_select[1:0] + sample_addr[9:0]
-                ref_i <= long_chirp_i[long_addr];
-                ref_q <= long_chirp_q[long_addr];
-                
-                `ifdef SIMULATION
-                if (DEBUG && $time < 100) begin
-                    $display("[MEM @%0t] Long chirp: seg=%b, addr=%d, I=%h, Q=%h",
-                            $time, segment_select, long_addr,
-                            long_chirp_i[long_addr], long_chirp_q[long_addr]);
-                end
-                `endif
-            end else begin
-                // Short chirp (0-1023)
-                ref_i <= short_chirp_i[sample_addr];
-                ref_q <= short_chirp_q[sample_addr];
-                
-                `ifdef SIMULATION
-                if (DEBUG && $time < 100) begin
-                    $display("[MEM @%0t] Short chirp: addr=%d, I=%h, Q=%h",
-                            $time, sample_addr, short_chirp_i[sample_addr], short_chirp_q[sample_addr]);
-                end
-                `endif
-            end
-            mem_ready <= 1'b1;
-        end else begin
-            mem_ready <= 1'b0;
-        end
+        mem_ready <= mem_request;
     end
 end
 
