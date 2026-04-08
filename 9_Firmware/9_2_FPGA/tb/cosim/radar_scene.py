@@ -21,7 +21,6 @@ Author: Phase 0.5 co-simulation suite for PLFM_RADAR
 
 import math
 import os
-import struct
 
 
 # =============================================================================
@@ -156,7 +155,7 @@ def generate_if_chirp(n_samples, chirp_bw=CHIRP_BW, f_if=F_IF, fs=FS_ADC):
         t = n / fs
         # Instantaneous frequency: f_if - chirp_bw/2 + chirp_rate * t
         # Phase: integral of 2*pi*f(t)*dt
-        f_inst = f_if - chirp_bw / 2 + chirp_rate * t
+        _f_inst = f_if - chirp_bw / 2 + chirp_rate * t  # noqa: F841 — documents instantaneous frequency formula
         phase = 2 * math.pi * (f_if - chirp_bw / 2) * t + math.pi * chirp_rate * t * t
         chirp_i.append(math.cos(phase))
         chirp_q.append(math.sin(phase))
@@ -668,7 +667,7 @@ def generate_all_test_vectors(output_dir=None):
         f.write(f"  ADC: {FS_ADC/1e6:.0f} MSPS, {ADC_BITS}-bit\n")
         f.write(f"  Range resolution: {RANGE_RESOLUTION:.1f} m\n")
         f.write(f"  Wavelength: {WAVELENGTH*1000:.2f} mm\n")
-        f.write(f"\n")
+        f.write("\n")
 
         f.write("Scenario 1: Single target\n")
         for t in targets1:

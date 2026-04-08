@@ -29,7 +29,7 @@ import sys
 # Add this directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fpga_model import SignalChain, sign_extend
+from fpga_model import SignalChain
 
 
 # =============================================================================
@@ -107,7 +107,7 @@ def load_rtl_csv(filepath):
     bb_i = []
     bb_q = []
     with open(filepath, 'r') as f:
-        header = f.readline()  # Skip header
+        f.readline()  # Skip header
         for line in f:
             line = line.strip()
             if not line:
@@ -280,7 +280,7 @@ def compare_scenario(scenario_name):
     py_i_stats = compute_signal_stats(py_i)
     py_q_stats = compute_signal_stats(py_q)
 
-    print(f"\nSignal Statistics:")
+    print("\nSignal Statistics:")
     print(f"  RTL I: mean={rtl_i_stats['mean']:.1f}, rms={rtl_i_stats['rms']:.1f}, "
           f"range=[{rtl_i_stats['min']}, {rtl_i_stats['max']}]")
     print(f"  RTL Q: mean={rtl_q_stats['mean']:.1f}, rms={rtl_q_stats['rms']:.1f}, "
@@ -352,12 +352,12 @@ def compare_scenario(scenario_name):
     corr_i_aligned = compute_correlation(aligned_rtl_i, aligned_py_i)
     corr_q_aligned = compute_correlation(aligned_rtl_q, aligned_py_q)
 
-    print(f"\nError Metrics (after alignment):")
+    print("\nError Metrics (after alignment):")
     print(f"  I-channel: RMS={rms_i:.2f} LSB, max={max_err_i} LSB, corr={corr_i_aligned:.6f}")
     print(f"  Q-channel: RMS={rms_q:.2f} LSB, max={max_err_q} LSB, corr={corr_q_aligned:.6f}")
 
     # ---- First/last sample comparison ----
-    print(f"\nFirst 10 samples (after alignment):")
+    print("\nFirst 10 samples (after alignment):")
     print(f"  {'idx':>4s}  {'RTL_I':>8s}  {'Py_I':>8s}  {'Err_I':>6s}  {'RTL_Q':>8s}  {'Py_Q':>8s}  {'Err_Q':>6s}")
     for k in range(min(10, aligned_len)):
         ei = aligned_rtl_i[k] - aligned_py_i[k]
@@ -444,7 +444,6 @@ def compare_scenario(scenario_name):
     print("PASS/FAIL Results:")
     all_pass = True
     for name, ok, detail in results:
-        status = "PASS" if ok else "FAIL"
         mark = "[PASS]" if ok else "[FAIL]"
         print(f"  {mark} {name}: {detail}")
         if not ok:

@@ -25,8 +25,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fpga_model import (
-    FFTEngine, FreqMatchedFilter, MatchedFilterChain,
-    RangeBinDecimator, sign_extend, saturate
+    MatchedFilterChain,
+    sign_extend, saturate
 )
 
 

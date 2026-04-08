@@ -19,7 +19,6 @@ Author: Phase 0.5 co-simulation suite for PLFM_RADAR
 """
 
 import os
-import struct
 
 # =============================================================================
 # Fixed-point utility functions
@@ -196,7 +195,7 @@ class NCO:
 
         if phase_valid:
             # Stage 1 NBA: phase_accum_reg <= phase_accumulator (old value)
-            new_phase_accum_reg = (self.phase_accumulator - ftw) & 0xFFFFFFFF  # old accum before add
+            _new_phase_accum_reg = (self.phase_accumulator - ftw) & 0xFFFFFFFF  # noqa: F841 — old accum before add (derivation reference)
             # Wait - let me re-derive. The Verilog is:
             #   phase_accumulator <= phase_accumulator + frequency_tuning_word;
             #   phase_accum_reg   <= phase_accumulator;  // OLD value (NBA)
@@ -812,7 +811,6 @@ class FFTEngine:
         # COMPUTE: LOG2N stages of butterflies
         for stage in range(log2n):
             half = 1 << stage
-            span = half << 1
             tw_stride = (n >> 1) >> stage
 
             for bfly in range(n // 2):

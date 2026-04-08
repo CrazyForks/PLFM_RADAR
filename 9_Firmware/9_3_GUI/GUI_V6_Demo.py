@@ -8,8 +8,6 @@ All buttons work, simulated radar data is generated in real-time
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import threading
-import queue
 import time
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,10 +15,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import logging
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Dict
 import random
 import json
-import os
 from datetime import datetime
 
 # Configure logging
@@ -1200,7 +1197,7 @@ def main():
         root = tk.Tk()
         
         # Create application
-        app = RadarDemoGUI(root)
+        _app = RadarDemoGUI(root)  # noqa: F841 — keeps reference alive
         
         # Center window
         root.update_idletasks()

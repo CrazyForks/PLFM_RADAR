@@ -8,15 +8,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-import matplotlib.patches as patches
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
-from scipy import signal
 from sklearn.cluster import DBSCAN
 from filterpy.kalman import KalmanFilter
 import crcmod
-import math
 import webbrowser
 import tempfile
 import os
@@ -30,9 +26,9 @@ except ImportError:
     logging.warning("pyusb not available. USB functionality will be disabled.")
 
 try:
-    from pyftdi.ftdi import Ftdi
-    from pyftdi.usbtools import UsbTools
-    from pyftdi.ftdi import FtdiError
+    from pyftdi.ftdi import Ftdi  # noqa: F401
+    from pyftdi.usbtools import UsbTools  # noqa: F401
+    from pyftdi.ftdi import FtdiError  # noqa: F401
     FTDI_AVAILABLE = True
 except ImportError:
     FTDI_AVAILABLE = False
@@ -294,7 +290,7 @@ class FT601Interface:
                             'device': dev,
                             'serial': serial
                         })
-                    except Exception as e:
+                    except Exception:
                         devices.append({
                             'description': f"FT601 USB3.0 (VID:{vid:04X}, PID:{pid:04X})",
                             'vendor_id': vid,
@@ -553,7 +549,7 @@ class STM32USBInterface:
                             'product_id': pid,
                             'device': dev
                         })
-                    except:
+                    except Exception:
                         devices.append({
                             'description': f"STM32 CDC (VID:{vid:04X}, PID:{pid:04X})",
                             'vendor_id': vid,
@@ -910,7 +906,7 @@ class RadarPacketParser:
         if len(packet) < 6:
             return None
             
-        sync = packet[0:2]
+        _sync = packet[0:2]  # noqa: F841
         packet_type = packet[2]
         length = packet[3]
         
@@ -1335,8 +1331,8 @@ class RadarGUI:
         
         logging.info("Radar system stopped")
     
-    def process_radar_data(self):
-        """Process incoming radar data from FT601"""
+    def _process_radar_data_ft601(self):
+        """Process incoming radar data from FT601 (legacy, superseded by FTDI version)."""
         buffer = bytearray()
         while True:
             if self.running and self.ft601_interface.is_open:
@@ -1375,7 +1371,7 @@ class RadarGUI:
         # This should match your packet structure
         return 64  # Example: 64-byte packets
     
-    def process_gps_data(self):
+    def _process_gps_data_ft601(self):
         """Step 16/17: Process GPS data from STM32 via USB CDC"""
         while True:
             if self.running and self.stm32_usb_interface.is_open:
@@ -1716,7 +1712,7 @@ def main():
     """Main application entry point"""
     try:
         root = tk.Tk()
-        app = RadarGUI(root)
+        _app = RadarGUI(root)  # noqa: F841 – must stay alive for mainloop
         root.mainloop()
     except Exception as e:
         logging.error(f"Application error: {e}")

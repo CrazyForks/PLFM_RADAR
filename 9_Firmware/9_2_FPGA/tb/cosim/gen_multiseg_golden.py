@@ -208,7 +208,6 @@ def generate_long_chirp_test():
     input_buffer_i = [0] * BUFFER_SIZE
     input_buffer_q = [0] * BUFFER_SIZE
     buffer_write_ptr = 0
-    current_segment = 0
     input_idx = 0
     chirp_samples_collected = 0
 
@@ -342,8 +341,9 @@ def generate_short_chirp_test():
         input_q.append(saturate(val_q, 16))
 
     # Zero-pad to 1024 (as RTL does in ST_ZERO_PAD)
-    padded_i = list(input_i) + [0] * (BUFFER_SIZE - SHORT_SAMPLES)
-    padded_q = list(input_q) + [0] * (BUFFER_SIZE - SHORT_SAMPLES)
+    # Note: padding computed here for documentation; actual buffer uses buf_i/buf_q below
+    _padded_i = list(input_i) + [0] * (BUFFER_SIZE - SHORT_SAMPLES)  # noqa: F841
+    _padded_q = list(input_q) + [0] * (BUFFER_SIZE - SHORT_SAMPLES)  # noqa: F841
 
     # The buffer truncation: ddc_i[17:2] + ddc_i[1]
     # For data already 16-bit sign-extended to 18: result is (val >> 2) + bit1

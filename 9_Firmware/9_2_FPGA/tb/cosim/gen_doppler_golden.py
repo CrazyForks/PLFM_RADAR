@@ -18,14 +18,13 @@ Usage:
 Author: Phase 0.5 Doppler co-simulation suite for PLFM_RADAR
 """
 
-import math
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fpga_model import (
-    DopplerProcessor, sign_extend, HAMMING_WINDOW
+    DopplerProcessor
 )
 from radar_scene import Target, generate_doppler_frame
 
@@ -121,7 +120,7 @@ def generate_scenario(name, targets, description, base_dir):
     """Generate input hex + golden output for one scenario."""
     print(f"\n{'='*60}")
     print(f"Scenario: {name} — {description}")
-    print(f"Model: CLEAN (dual 16-pt FFT)")
+    print("Model: CLEAN (dual 16-pt FFT)")
     print(f"{'='*60}")
 
     # Generate Doppler frame (32 chirps x 64 range bins)
@@ -172,7 +171,7 @@ def generate_scenario(name, targets, description, base_dir):
     write_hex_32bit(golden_hex, list(zip(flat_i, flat_q)))
 
     # ---- Find peak per range bin ----
-    print(f"\n  Peak Doppler bins per range bin (top 5 by magnitude):")
+    print("\n  Peak Doppler bins per range bin (top 5 by magnitude):")
     peak_info = []
     for rbin in range(RANGE_BINS):
         mags = [abs(doppler_i[rbin][d]) + abs(doppler_q[rbin][d])

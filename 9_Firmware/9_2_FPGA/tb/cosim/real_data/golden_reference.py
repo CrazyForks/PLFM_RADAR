@@ -20,7 +20,6 @@ Usage:
 
 import numpy as np
 import os
-import sys
 import argparse
 
 # ===========================================================================
@@ -787,7 +786,7 @@ def run_mti_canceller(decim_i, decim_q, enable=True):
     if not enable:
         mti_i[:] = decim_i
         mti_q[:] = decim_q
-        print(f"  Pass-through mode (MTI disabled)")
+        print("  Pass-through mode (MTI disabled)")
         return mti_i, mti_q
 
     for c in range(n_chirps):
@@ -803,7 +802,7 @@ def run_mti_canceller(decim_i, decim_q, enable=True):
                 mti_i[c, r] = saturate(diff_i, 16)
                 mti_q[c, r] = saturate(diff_q, 16)
 
-    print(f"  Chirp 0: muted (zeros)")
+    print("  Chirp 0: muted (zeros)")
     print(f"  Chirps 1-{n_chirps-1}: I range [{mti_i[1:].min()}, {mti_i[1:].max()}], "
           f"Q range [{mti_q[1:].min()}, {mti_q[1:].max()}]")
     return mti_i, mti_q
@@ -839,7 +838,7 @@ def run_dc_notch(doppler_i, doppler_q, width=2):
     print(f"[DC NOTCH] width={width}, {n_range} range bins x {n_doppler} Doppler bins (dual sub-frame)")
 
     if width == 0:
-        print(f"  Pass-through (width=0)")
+        print("  Pass-through (width=0)")
         return notched_i, notched_q
 
     zeroed_count = 0
@@ -1029,7 +1028,7 @@ def run_float_reference(iq_i, iq_q):
     Uses the exact same RTL Hamming window coefficients (Q15) to isolate
     only the FFT fixed-point quantization error.
     """
-    print(f"\n[FLOAT REF] Running floating-point reference pipeline")
+    print("\n[FLOAT REF] Running floating-point reference pipeline")
     
     n_chirps, n_samples = iq_i.shape[0], iq_i.shape[1] if iq_i.ndim == 2 else len(iq_i)
     
@@ -1384,10 +1383,10 @@ def main():
     cfar_detections = np.argwhere(cfar_flags)
     cfar_det_list_file = os.path.join(output_dir, "fullchain_cfar_detections.txt")
     with open(cfar_det_list_file, 'w') as f:
-        f.write(f"# AERIS-10 Full-Chain CFAR Detection List\n")
+        f.write("# AERIS-10 Full-Chain CFAR Detection List\n")
         f.write(f"# Chain: decim -> MTI -> Doppler -> DC notch(w={DC_NOTCH_WIDTH}) -> CA-CFAR\n")
         f.write(f"# CFAR: guard={CFAR_GUARD}, train={CFAR_TRAIN}, alpha=0x{CFAR_ALPHA:02X}, mode={CFAR_MODE}\n")
-        f.write(f"# Format: range_bin doppler_bin magnitude threshold\n")
+        f.write("# Format: range_bin doppler_bin magnitude threshold\n")
         for det in cfar_detections:
             r, d = det
             f.write(f"{r} {d} {cfar_mag[r, d]} {cfar_thr[r, d]}\n")
@@ -1406,9 +1405,9 @@ def main():
     # Save full-chain detection reference
     fc_det_file = os.path.join(output_dir, "fullchain_detections.txt")
     with open(fc_det_file, 'w') as f:
-        f.write(f"# AERIS-10 Full-Chain Golden Reference Detections\n")
+        f.write("# AERIS-10 Full-Chain Golden Reference Detections\n")
         f.write(f"# Threshold: {args.threshold}\n")
-        f.write(f"# Format: range_bin doppler_bin magnitude\n")
+        f.write("# Format: range_bin doppler_bin magnitude\n")
         for d in fc_detections:
             rbin, dbin = d
             f.write(f"{rbin} {dbin} {fc_mag[rbin, dbin]}\n")
@@ -1433,9 +1432,9 @@ def main():
     # Save detection list
     det_file = os.path.join(output_dir, "detections.txt")
     with open(det_file, 'w') as f:
-        f.write(f"# AERIS-10 Golden Reference Detections\n")
+        f.write("# AERIS-10 Golden Reference Detections\n")
         f.write(f"# Threshold: {args.threshold}\n")
-        f.write(f"# Format: range_bin doppler_bin magnitude\n")
+        f.write("# Format: range_bin doppler_bin magnitude\n")
         for d in detections:
             rbin, dbin = d
             f.write(f"{rbin} {dbin} {mag[rbin, dbin]}\n")
@@ -1484,12 +1483,12 @@ def main():
     print(f"  Range FFT: {FFT_SIZE}-point → {snr_range:.1f} dB vs float")
     print(f"  Doppler FFT (direct): {DOPPLER_FFT_SIZE}-point Hamming → {snr_doppler:.1f} dB vs float")
     print(f"  Detections (direct): {len(detections)} (threshold={args.threshold})")
-    print(f"  Full-chain decimator: 1024→64 peak detection")
+    print("  Full-chain decimator: 1024→64 peak detection")
     print(f"  Full-chain detections: {len(fc_detections)} (threshold={args.threshold})")
     print(f"  MTI+CFAR chain: decim → MTI → Doppler → DC notch(w={DC_NOTCH_WIDTH}) → CA-CFAR")
     print(f"  CFAR detections: {len(cfar_detections)} (guard={CFAR_GUARD}, train={CFAR_TRAIN}, alpha=0x{CFAR_ALPHA:02X})")
     print(f"  Hex stimulus files: {output_dir}/")
-    print(f"  Ready for RTL co-simulation with Icarus Verilog")
+    print("  Ready for RTL co-simulation with Icarus Verilog")
     
     # -----------------------------------------------------------------------
     # Optional plots

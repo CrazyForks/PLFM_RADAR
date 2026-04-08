@@ -206,7 +206,7 @@ def test_long_chirp():
     expected_max_from_model = 32767 * 0.9
     uses_model_scaling = max_mag > expected_max_from_model * 0.8
     if uses_model_scaling:
-        print(f"  Scaling: CONSISTENT with radar_scene.py model (0.9 * Q15)")
+        print("  Scaling: CONSISTENT with radar_scene.py model (0.9 * Q15)")
     else:
         warn(f"Magnitude ({max_mag:.0f}) is much lower than expected from Python model "
              f"({expected_max_from_model:.0f}). .mem files may have unknown provenance.")
@@ -246,7 +246,7 @@ def test_long_chirp():
         f_max = max(freq_estimates)
         f_range = f_max - f_min
 
-        print(f"\n  Instantaneous frequency analysis (post-DDC baseband):")
+        print("\n  Instantaneous frequency analysis (post-DDC baseband):")
         print(f"    Start freq:  {f_start/1e6:.3f} MHz")
         print(f"    End freq:    {f_end/1e6:.3f} MHz")
         print(f"    Min freq:    {f_min/1e6:.3f} MHz")
@@ -269,7 +269,7 @@ def test_long_chirp():
     # Compare segment boundaries for overlap-save consistency
     # In proper overlap-save, the chirp data should be segmented at 896-sample boundaries
     # with segments being 1024-sample FFT blocks
-    print(f"\n  Segment boundary analysis:")
+    print("\n  Segment boundary analysis:")
     for seg in range(4):
         seg_i = read_mem_hex(f'long_chirp_seg{seg}_i.mem')
         seg_q = read_mem_hex(f'long_chirp_seg{seg}_q.mem')
@@ -290,9 +290,9 @@ def test_long_chirp():
             print(f"  Seg {seg}: avg_mag={seg_avg:.1f}, max_mag={seg_max:.1f}, "
                   f"near-zero={zero_count}/{len(seg_mags)}")
             if zero_count > 500:
-                print(f"    -> Seg 3 mostly zeros (chirp shorter than 4096 samples)")
+                print("    -> Seg 3 mostly zeros (chirp shorter than 4096 samples)")
             else:
-                print(f"    -> Seg 3 has significant data throughout")
+                print("    -> Seg 3 has significant data throughout")
         else:
             print(f"  Seg {seg}: avg_mag={seg_avg:.1f}, max_mag={seg_max:.1f}")
 
@@ -330,8 +330,10 @@ def test_short_chirp():
     freq_est = []
     for n in range(1, len(phases)):
         dp = phases[n] - phases[n-1]
-        while dp > math.pi: dp -= 2 * math.pi
-        while dp < -math.pi: dp += 2 * math.pi
+        while dp > math.pi:
+            dp -= 2 * math.pi
+        while dp < -math.pi:
+            dp += 2 * math.pi
         freq_est.append(dp * FS_SYS / (2 * math.pi))
 
     if freq_est:
@@ -382,9 +384,9 @@ def test_chirp_vs_model():
     print(f"  Exact I matches: {matches}/{len(model_i)}")
 
     if matches > len(model_i) * 0.9:
-        print(f"  -> .mem files MATCH Python model")
+        print("  -> .mem files MATCH Python model")
     else:
-        warn(f".mem files do NOT match Python model. They likely have different provenance.")
+        warn(".mem files do NOT match Python model. They likely have different provenance.")
         # Try to detect scaling
         if mem_max > 0:
             ratio = model_max / mem_max
@@ -399,14 +401,16 @@ def test_chirp_vs_model():
     phase_diffs = []
     for mp, fp in zip(model_phases, mem_phases):
         d = mp - fp
-        while d > math.pi: d -= 2 * math.pi
-        while d < -math.pi: d += 2 * math.pi
+        while d > math.pi:
+            d -= 2 * math.pi
+        while d < -math.pi:
+            d += 2 * math.pi
         phase_diffs.append(d)
 
     avg_phase_diff = sum(phase_diffs) / len(phase_diffs)
     max_phase_diff = max(abs(d) for d in phase_diffs)
 
-    print(f"\n  Phase comparison (shape regardless of amplitude):")
+    print("\n  Phase comparison (shape regardless of amplitude):")
     print(f"    Avg phase diff:  {avg_phase_diff:.4f} rad ({math.degrees(avg_phase_diff):.2f} deg)")
     print(f"    Max phase diff:  {max_phase_diff:.4f} rad ({math.degrees(max_phase_diff):.2f} deg)")
 

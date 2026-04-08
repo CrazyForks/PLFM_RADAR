@@ -74,7 +74,7 @@ def load_doppler_csv(filepath):
     """
     data = {}
     with open(filepath, 'r') as f:
-        header = f.readline()
+        f.readline()  # Skip header
         for line in f:
             line = line.strip()
             if not line:
@@ -163,11 +163,11 @@ def compare_scenario(name, config, base_dir):
 
     if not os.path.exists(golden_path):
         print(f"  ERROR: Golden CSV not found: {golden_path}")
-        print(f"  Run: python3 gen_doppler_golden.py")
+        print("  Run: python3 gen_doppler_golden.py")
         return False, {}
     if not os.path.exists(rtl_path):
         print(f"  ERROR: RTL CSV not found: {rtl_path}")
-        print(f"  Run the Verilog testbench first")
+        print("  Run the Verilog testbench first")
         return False, {}
 
     py_data = load_doppler_csv(golden_path)
@@ -201,7 +201,7 @@ def compare_scenario(name, config, base_dir):
     else:
         energy_ratio = 1.0 if rtl_energy == 0 else float('inf')
 
-    print(f"\n  Global energy:")
+    print("\n  Global energy:")
     print(f"    Python: {py_energy}")
     print(f"    RTL:    {rtl_energy}")
     print(f"    Ratio:  {energy_ratio:.4f}")
@@ -255,7 +255,7 @@ def compare_scenario(name, config, base_dir):
     avg_corr_i = sum(i_correlations) / len(i_correlations)
     avg_corr_q = sum(q_correlations) / len(q_correlations)
 
-    print(f"\n  Per-range-bin metrics:")
+    print("\n  Per-range-bin metrics:")
     print(f"    Peak Doppler bin agreement (+/-1 within sub-frame): {peak_agreements}/{RANGE_BINS} "
           f"({peak_agreement_frac:.0%})")
     print(f"    Avg magnitude correlation: {avg_mag_corr:.4f}")
@@ -263,7 +263,7 @@ def compare_scenario(name, config, base_dir):
     print(f"    Avg Q-channel correlation: {avg_corr_q:.4f}")
 
     # Show top 5 range bins by Python energy
-    print(f"\n  Top 5 range bins by Python energy:")
+    print("\n  Top 5 range bins by Python energy:")
     top_rbins = sorted(peak_details, key=lambda x: -x['py_energy'])[:5]
     for d in top_rbins:
         print(f"    rbin={d['rbin']:2d}: py_peak={d['py_peak']:2d}, "
@@ -291,7 +291,7 @@ def compare_scenario(name, config, base_dir):
         checks.append((f'High-energy rbin avg mag_corr >= {MAG_CORR_MIN:.2f} '
                         f'(actual={he_mag_corr:.3f})', he_ok))
 
-    print(f"\n  Pass/Fail Checks:")
+    print("\n  Pass/Fail Checks:")
     all_pass = True
     for check_name, passed in checks:
         status = "PASS" if passed else "FAIL"

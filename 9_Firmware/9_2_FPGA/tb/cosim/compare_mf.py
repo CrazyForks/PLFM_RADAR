@@ -80,7 +80,7 @@ def load_csv(filepath):
     vals_i = []
     vals_q = []
     with open(filepath, 'r') as f:
-        header = f.readline()
+        f.readline()  # Skip header
         for line in f:
             line = line.strip()
             if not line:
@@ -172,11 +172,11 @@ def compare_scenario(scenario_name, config, base_dir):
 
     if not os.path.exists(golden_path):
         print(f"  ERROR: Golden CSV not found: {golden_path}")
-        print(f"  Run: python3 gen_mf_cosim_golden.py")
+        print("  Run: python3 gen_mf_cosim_golden.py")
         return False, {}
     if not os.path.exists(rtl_path):
         print(f"  ERROR: RTL CSV not found: {rtl_path}")
-        print(f"  Run the RTL testbench first")
+        print("  Run the RTL testbench first")
         return False, {}
 
     py_i, py_q = load_csv(golden_path)
@@ -205,7 +205,7 @@ def compare_scenario(scenario_name, config, base_dir):
         energy_ratio = float('inf') if py_energy == 0 else 0.0
         rms_ratio = float('inf') if py_rms == 0 else 0.0
 
-    print(f"\n  Energy:")
+    print("\n  Energy:")
     print(f"    Python total energy:  {py_energy}")
     print(f"    RTL total energy:     {rtl_energy}")
     print(f"    Energy ratio (RTL/Py): {energy_ratio:.4f}")
@@ -217,7 +217,7 @@ def compare_scenario(scenario_name, config, base_dir):
     py_peak_bin, py_peak_mag = find_peak(py_i, py_q)
     rtl_peak_bin, rtl_peak_mag = find_peak(rtl_i, rtl_q)
 
-    print(f"\n  Peak location:")
+    print("\n  Peak location:")
     print(f"    Python: bin={py_peak_bin}, mag={py_peak_mag}")
     print(f"    RTL:    bin={rtl_peak_bin}, mag={rtl_peak_mag}")
 
@@ -242,7 +242,7 @@ def compare_scenario(scenario_name, config, base_dir):
     corr_i = pearson_correlation(py_i, rtl_i)
     corr_q = pearson_correlation(py_q, rtl_q)
 
-    print(f"\n  Channel correlation:")
+    print("\n  Channel correlation:")
     print(f"    I-channel: {corr_i:.6f}")
     print(f"    Q-channel: {corr_q:.6f}")
 
@@ -278,7 +278,7 @@ def compare_scenario(scenario_name, config, base_dir):
                     energy_ok))
 
     # Print checks
-    print(f"\n  Pass/Fail Checks:")
+    print("\n  Pass/Fail Checks:")
     all_pass = True
     for name, passed in checks:
         status = "PASS" if passed else "FAIL"

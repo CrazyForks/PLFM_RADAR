@@ -134,7 +134,7 @@ def main():
     print("AERIS-10 Chirp .mem File Generator")
     print("=" * 60)
     print()
-    print(f"Parameters:")
+    print("Parameters:")
     print(f"  CHIRP_BW         = {CHIRP_BW/1e6:.1f} MHz")
     print(f"  FS_SYS           = {FS_SYS/1e6:.1f} MHz")
     print(f"  T_LONG_CHIRP     = {T_LONG_CHIRP*1e6:.1f} us")
@@ -212,7 +212,7 @@ def main():
             mismatches += 1
 
     if mismatches == 0:
-        print(f"  [PASS] Seg0 matches radar_scene.py generate_reference_chirp_q15()")
+        print("  [PASS] Seg0 matches radar_scene.py generate_reference_chirp_q15()")
     else:
         print(f"  [FAIL] Seg0 has {mismatches} mismatches vs generate_reference_chirp_q15()")
         return 1
@@ -225,13 +225,13 @@ def main():
     # Check seg3 zero padding
     seg3_i_path = os.path.join(MEM_DIR, 'long_chirp_seg3_i.mem')
     with open(seg3_i_path, 'r') as f:
-        seg3_lines = [l.strip() for l in f if l.strip()]
-    nonzero_seg3 = sum(1 for l in seg3_lines if l != '0000')
+        seg3_lines = [line.strip() for line in f if line.strip()]
+    nonzero_seg3 = sum(1 for line in seg3_lines if line != '0000')
     print(f"  Seg3 non-zero entries: {nonzero_seg3}/{len(seg3_lines)} "
           f"(expected 0 since chirp ends at sample 2999)")
 
     if nonzero_seg3 == 0:
-        print(f"  [PASS] Seg3 is all zeros (chirp 3000 samples < seg3 start 3072)")
+        print("  [PASS] Seg3 is all zeros (chirp 3000 samples < seg3 start 3072)")
     else:
         print(f"  [WARN] Seg3 has {nonzero_seg3} non-zero entries")
 

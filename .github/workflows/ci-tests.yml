@@ -8,11 +8,12 @@ on:
 
 jobs:
   # ===========================================================================
-  # Job 0: Ruff Lint (active Python files only)
-  # Excludes legacy GUI_V*.py files and untracked v7/ directory
+  # Job 0: Ruff Lint (all maintained Python files)
+  # Covers: active GUI files, v6+ GUIs, v7/ module, FPGA cosim scripts
+  # Excludes: legacy GUI_V1-V5, schematics, simulation, 8_Utils
   # ===========================================================================
   lint:
-    name: Ruff Lint (active files)
+    name: Ruff Lint
     runs-on: ubuntu-latest
 
     steps:
@@ -27,13 +28,20 @@ jobs:
       - name: Install ruff
         run: pip install ruff
 
-      - name: Run ruff on active files
+      - name: Run ruff on maintained files
         run: |
           ruff check \
             9_Firmware/9_3_GUI/radar_protocol.py \
             9_Firmware/9_3_GUI/radar_dashboard.py \
             9_Firmware/9_3_GUI/smoke_test.py \
-            9_Firmware/9_3_GUI/test_radar_dashboard.py
+            9_Firmware/9_3_GUI/test_radar_dashboard.py \
+            9_Firmware/9_3_GUI/GUI_V6.py \
+            9_Firmware/9_3_GUI/GUI_V6_Demo.py \
+            9_Firmware/9_3_GUI/GUI_PyQt_Map.py \
+            9_Firmware/9_3_GUI/GUI_V7_PyQt.py \
+            9_Firmware/9_3_GUI/v7/ \
+            9_Firmware/9_2_FPGA/tb/cosim/ \
+            9_Firmware/9_2_FPGA/tb/gen_mf_golden_ref.py
 
   # ===========================================================================
   # Job 1: Python Host Software Tests (58 tests)

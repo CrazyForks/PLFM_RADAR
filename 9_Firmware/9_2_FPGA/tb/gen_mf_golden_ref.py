@@ -91,7 +91,7 @@ def generate_case(case_num, sig_i, sig_q, ref_i, ref_q, description, outdir):
     peak_q_q = out_q_q[peak_bin]
 
     # Write hex files
-    prefix = os.path.join(outdir, f"mf_golden")
+    prefix = os.path.join(outdir, "mf_golden")
     write_hex_file(f"{prefix}_sig_i_case{case_num}.hex", sig_i)
     write_hex_file(f"{prefix}_sig_q_case{case_num}.hex", sig_q)
     write_hex_file(f"{prefix}_ref_i_case{case_num}.hex", ref_i)
@@ -233,7 +233,7 @@ def main():
             f.write(f"  Peak Q (float):        {s['peak_q_float']:.6f}\n")
             f.write(f"  Peak I (quantized):    {s['peak_i_quant']}\n")
             f.write(f"  Peak Q (quantized):    {s['peak_q_quant']}\n")
-            f.write(f"  Files:\n")
+            f.write("  Files:\n")
             for fname in s["files"]:
                 f.write(f"    {fname}\n")
             f.write("\n")
