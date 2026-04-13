@@ -126,17 +126,40 @@ def write_mem_file(filename, values):
     with open(path, 'w') as f:
         for v in values:
             f.write(to_hex16(v) + '\n')
+    print(f"  Wrote {filename}: {len(values)} entries")
 
 
 def main():
+    print("=" * 60)
+    print("AERIS-10 Chirp .mem File Generator")
+    print("=" * 60)
+    print()
+    print("Parameters:")
+    print(f"  CHIRP_BW         = {CHIRP_BW/1e6:.1f} MHz")
+    print(f"  FS_SYS           = {FS_SYS/1e6:.1f} MHz")
+    print(f"  T_LONG_CHIRP     = {T_LONG_CHIRP*1e6:.1f} us")
+    print(f"  T_SHORT_CHIRP    = {T_SHORT_CHIRP*1e6:.1f} us")
+    print(f"  LONG_CHIRP_SAMPLES = {LONG_CHIRP_SAMPLES}")
+    print(f"  SHORT_CHIRP_SAMPLES = {SHORT_CHIRP_SAMPLES}")
+    print(f"  FFT_SIZE         = {FFT_SIZE}")
+    print(f"  Chirp rate (long)  = {CHIRP_BW/T_LONG_CHIRP:.3e} Hz/s")
+    print(f"  Chirp rate (short) = {CHIRP_BW/T_SHORT_CHIRP:.3e} Hz/s")
+    print(f"  Q15 scale        = {SCALE}")
+    print()
 
     # ---- Long chirp ----
+    print("Generating full long chirp (3000 samples)...")
     long_i, long_q = generate_full_long_chirp()
 
     # Verify first sample matches generate_reference_chirp_q15() from radar_scene.py
     # (which only generates the first 1024 samples)
+    print(f"  Sample[0]:    I={long_i[0]:6d}  Q={long_q[0]:6d}")
+    print(f"  Sample[1023]: I={long_i[1023]:6d}  Q={long_q[1023]:6d}")
+    print(f"  Sample[2999]: I={long_i[2999]:6d}  Q={long_q[2999]:6d}")
 
     # Segment into 4 x 1024 blocks
+    print()
+    print("Segmenting into 4 x 1024 blocks...")
     for seg in range(LONG_SEGMENTS):
         start = seg * FFT_SIZE
         end = start + FFT_SIZE
@@ -154,18 +177,27 @@ def main():
                 seg_i.append(0)
                 seg_q.append(0)
 
-        FFT_SIZE - valid_count
+        zero_count = FFT_SIZE - valid_count
+        print(f"  Seg {seg}: indices [{start}:{end-1}], "
+              f"valid={valid_count}, zeros={zero_count}")
 
         write_mem_file(f"long_chirp_seg{seg}_i.mem", seg_i)
         write_mem_file(f"long_chirp_seg{seg}_q.mem", seg_q)
 
     # ---- Short chirp ----
+    print()
+    print("Generating short chirp (50 samples)...")
     short_i, short_q = generate_short_chirp()
+    print(f"  Sample[0]:  I={short_i[0]:6d}  Q={short_q[0]:6d}")
+    print(f"  Sample[49]: I={short_i[49]:6d}  Q={short_q[49]:6d}")
 
     write_mem_file("short_chirp_i.mem", short_i)
     write_mem_file("short_chirp_q.mem", short_q)
 
     # ---- Verification summary ----
+    print()
+    print("=" * 60)
+    print("Verification:")
 
     # Cross-check seg0 against radar_scene.py generate_reference_chirp_q15()
     # That function generates exactly the first 1024 samples of the chirp
@@ -180,24 +212,33 @@ def main():
             mismatches += 1
 
     if mismatches == 0:
-        pass
+        print("  [PASS] Seg0 matches radar_scene.py generate_reference_chirp_q15()")
     else:
+        print(f"  [FAIL] Seg0 has {mismatches} mismatches vs generate_reference_chirp_q15()")
         return 1
 
     # Check magnitude envelope
-    max(math.sqrt(i*i + q*q) for i, q in zip(long_i, long_q, strict=False))
+    max_mag = max(math.sqrt(i*i + q*q) for i, q in zip(long_i, long_q, strict=False))
+    print(f"  Max magnitude: {max_mag:.1f} (expected ~{Q15_MAX * SCALE:.1f})")
+    print(f"  Magnitude ratio: {max_mag / (Q15_MAX * SCALE):.6f}")
 
     # Check seg3 zero padding
     seg3_i_path = os.path.join(MEM_DIR, 'long_chirp_seg3_i.mem')
     with open(seg3_i_path) as f:
         seg3_lines = [line.strip() for line in f if line.strip()]
     nonzero_seg3 = sum(1 for line in seg3_lines if line != '0000')
+    print(f"  Seg3 non-zero entries: {nonzero_seg3}/{len(seg3_lines)} "
+          f"(expected 0 since chirp ends at sample 2999)")
 
     if nonzero_seg3 == 0:
-        pass
+        print("  [PASS] Seg3 is all zeros (chirp 3000 samples < seg3 start 3072)")
     else:
-        pass
+        print(f"  [WARN] Seg3 has {nonzero_seg3} non-zero entries")
 
+    print()
+    print(f"Generated 10 .mem files in {os.path.abspath(MEM_DIR)}")
+    print("Run validate_mem_files.py to do full validation.")
+    print("=" * 60)
 
     return 0
 

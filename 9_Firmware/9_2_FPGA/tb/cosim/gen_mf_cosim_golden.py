@@ -75,6 +75,7 @@ def generate_case(case_name, sig_i, sig_q, ref_i, ref_q, description, outdir,
 
     Returns dict with case info and results.
     """
+    print(f"\n--- {case_name}: {description} ---")
 
     assert len(sig_i) == FFT_SIZE, f"sig_i length {len(sig_i)} != {FFT_SIZE}"
     assert len(sig_q) == FFT_SIZE
@@ -87,6 +88,8 @@ def generate_case(case_name, sig_i, sig_q, ref_i, ref_q, description, outdir,
         write_hex_16bit(os.path.join(outdir, f"mf_sig_{case_name}_q.hex"), sig_q)
         write_hex_16bit(os.path.join(outdir, f"mf_ref_{case_name}_i.hex"), ref_i)
         write_hex_16bit(os.path.join(outdir, f"mf_ref_{case_name}_q.hex"), ref_q)
+        print(f"  Wrote input hex: mf_sig_{case_name}_{{i,q}}.hex, "
+              f"mf_ref_{case_name}_{{i,q}}.hex")
 
     # Run through bit-accurate Python model
     mf = MatchedFilterChain(fft_size=FFT_SIZE)
@@ -101,6 +104,9 @@ def generate_case(case_name, sig_i, sig_q, ref_i, ref_q, description, outdir,
             peak_mag = mag
             peak_bin = k
 
+    print(f"  Output: {len(out_i)} samples")
+    print(f"  Peak bin: {peak_bin}, magnitude: {peak_mag}")
+    print(f"  Peak I={out_i[peak_bin]}, Q={out_q[peak_bin]}")
 
     # Save golden output hex
     write_hex_16bit(os.path.join(outdir, f"mf_golden_py_i_{case_name}.hex"), out_i)
@@ -129,6 +135,10 @@ def generate_case(case_name, sig_i, sig_q, ref_i, ref_q, description, outdir,
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
+    print("=" * 60)
+    print("Matched Filter Co-Sim Golden Reference Generator")
+    print("Using bit-accurate Python model (fpga_model.py)")
+    print("=" * 60)
 
     results = []
 
@@ -148,7 +158,8 @@ def main():
                           base_dir)
         results.append(r)
     else:
-        pass
+        print("\nWARNING: bb_mf_test / ref_chirp hex files not found.")
+        print("Run radar_scene.py first.")
 
     # ---- Case 2: DC autocorrelation ----
     dc_val = 0x1000  # 4096
@@ -190,9 +201,16 @@ def main():
     results.append(r)
 
     # ---- Summary ----
-    for _ in results:
-        pass
+    print("\n" + "=" * 60)
+    print("Summary:")
+    print("=" * 60)
+    for r in results:
+        print(f"  {r['case_name']:10s}: peak at bin {r['peak_bin']}, "
+              f"mag={r['peak_mag']}, I={r['peak_i']}, Q={r['peak_q']}")
 
+    print(f"\nGenerated {len(results)} golden reference cases.")
+    print("Files written to:", base_dir)
+    print("=" * 60)
 
 
 if __name__ == '__main__':

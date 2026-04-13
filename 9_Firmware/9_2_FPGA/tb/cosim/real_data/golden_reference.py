@@ -69,6 +69,7 @@ FIR_COEFFS_HEX = [
 # DDC output interface
 DDC_OUT_BITS = 16                # 18 → 16 bit with rounding + saturation
 
+# FFT (Range)
 FFT_SIZE = 1024
 FFT_DATA_W = 16
 FFT_INTERNAL_W = 32
@@ -147,15 +148,21 @@ def load_and_quantize_adi_data(data_path, config_path, frame_idx=0):
     4. Upconvert to 120 MHz IF (add I*cos - Q*sin) to create real signal
     5. Quantize to 8-bit unsigned (matching AD9484)
     """
+    print(f"[LOAD] Loading ADI dataset from {data_path}")
     data = np.load(data_path, allow_pickle=True)
     config = np.load(config_path, allow_pickle=True)
     
+    print(f"  Shape: {data.shape}, dtype: {data.dtype}")
+    print(f"  Config: sample_rate={config[0]:.0f}, IF={config[1]:.0f}, "
+          f"RF={config[2]:.0f}, chirps={config[3]:.0f}, BW={config[4]:.0f}, "
+          f"ramp={config[5]:.6f}s")
     
     # Extract one frame
     frame = data[frame_idx]  # (256, 1079) complex
     
     # Use first 32 chirps, first 1024 samples
     iq_block = frame[:DOPPLER_CHIRPS, :FFT_SIZE]  # (32, 1024) complex
+    print(f"  Using frame {frame_idx}: {DOPPLER_CHIRPS} chirps x {FFT_SIZE} samples")
     
     # The ADI data is baseband complex IQ at 4 MSPS.
     # AERIS-10 sees a real signal at 400 MSPS with 120 MHz IF.
@@ -190,6 +197,9 @@ def load_and_quantize_adi_data(data_path, config_path, frame_idx=0):
     iq_i = np.clip(iq_i, -32768, 32767)
     iq_q = np.clip(iq_q, -32768, 32767)
     
+    print(f"  Scaled to 16-bit (peak target {INPUT_PEAK_TARGET}): "
+          f"I range [{iq_i.min()}, {iq_i.max()}], "
+          f"Q range [{iq_q.min()}, {iq_q.max()}]")
     
     # Also create 8-bit ADC stimulus for DDC validation
     # Use just one chirp of real-valued data (I channel only, shifted to unsigned)
@@ -281,6 +291,7 @@ def run_ddc(adc_samples):
     # Build FIR coefficients as signed integers
     fir_coeffs = np.array([hex_to_signed(c, 18) for c in FIR_COEFFS_HEX], dtype=np.int64)
     
+    print(f"[DDC] Processing {n_samples} ADC samples at 400 MHz")
     
     # --- NCO + Mixer ---
     phase_accum = np.int64(0)
@@ -313,6 +324,7 @@ def run_ddc(adc_samples):
         # Phase accumulator update (ignore dithering for bit-accuracy)
         phase_accum = (phase_accum + NCO_PHASE_INC) & 0xFFFFFFFF
     
+    print(f"  Mixer output: I range [{mixed_i.min()}, {mixed_i.max()}]")
     
     # --- CIC Decimator (5-stage, decimate-by-4) ---
     # Integrator section (at 400 MHz rate)
@@ -320,9 +332,7 @@ def run_ddc(adc_samples):
     for n in range(n_samples):
         integrators[0][n + 1] = (integrators[0][n] + mixed_i[n]) & ((1 << CIC_ACC_WIDTH) - 1)
         for s in range(1, CIC_STAGES):
-            integrators[s][n + 1] = (
-                integrators[s][n] + integrators[s - 1][n + 1]
-            ) & ((1 << CIC_ACC_WIDTH) - 1)
+            integrators[s][n + 1] = (integrators[s][n] + integrators[s - 1][n + 1]) & ((1 << CIC_ACC_WIDTH) - 1)
     
     # Downsample by 4
     n_decimated = n_samples // CIC_DECIMATION
@@ -356,6 +366,7 @@ def run_ddc(adc_samples):
         scaled = comb[CIC_STAGES - 1][k] >> CIC_GAIN_SHIFT
         cic_output[k] = saturate(scaled, CIC_OUT_BITS)
     
+    print(f"  CIC output: {n_decimated} samples, range [{cic_output.min()}, {cic_output.max()}]")
     
     # --- FIR Filter (32-tap) ---
     delay_line = np.zeros(FIR_TAPS, dtype=np.int64)
@@ -377,6 +388,7 @@ def run_ddc(adc_samples):
         if fir_output[k] >= (1 << 17):
             fir_output[k] -= (1 << 18)
     
+    print(f"  FIR output: range [{fir_output.min()}, {fir_output.max()}]")
     
     # --- DDC Interface (18 → 16 bit) ---
     ddc_output = np.zeros(n_decimated, dtype=np.int64)
@@ -393,6 +405,7 @@ def run_ddc(adc_samples):
         else:
             ddc_output[k] = saturate(trunc + round_bit, 16)
     
+    print(f"  DDC output (16-bit): range [{ddc_output.min()}, {ddc_output.max()}]")
     
     return ddc_output
 
@@ -465,6 +478,7 @@ def run_range_fft(iq_i, iq_q, twiddle_file=None):
         # Generate twiddle factors if file not available
         cos_rom = np.round(32767 * np.cos(2 * np.pi * np.arange(N // 4) / N)).astype(np.int64)
     
+    print(f"[FFT] Running {N}-point range FFT (bit-accurate)")
     
     # Bit-reverse and sign-extend to 32-bit internal width
     def bit_reverse(val, bits):
@@ -502,6 +516,9 @@ def run_range_fft(iq_i, iq_q, twiddle_file=None):
             b_re = mem_re[addr_odd]
             b_im = mem_im[addr_odd]
             
+            # Twiddle multiply: forward FFT
+            #   prod_re = b_re * tw_cos + b_im * tw_sin
+            #   prod_im = b_im * tw_cos - b_re * tw_sin
             prod_re = b_re * tw_cos + b_im * tw_sin
             prod_im = b_im * tw_cos - b_re * tw_sin
             
@@ -524,6 +541,8 @@ def run_range_fft(iq_i, iq_q, twiddle_file=None):
         out_re[n] = saturate(mem_re[n], FFT_DATA_W)
         out_im[n] = saturate(mem_im[n], FFT_DATA_W)
     
+    print(f"  FFT output: re range [{out_re.min()}, {out_re.max()}], "
+          f"im range [{out_im.min()}, {out_im.max()}]")
     
     return out_re, out_im
 
@@ -558,6 +577,8 @@ def run_range_bin_decimator(range_fft_i, range_fft_q,
     decimated_i = np.zeros((n_chirps, output_bins), dtype=np.int64)
     decimated_q = np.zeros((n_chirps, output_bins), dtype=np.int64)
 
+    print(f"[DECIM] Decimating {n_in}→{output_bins} bins, mode={'peak' if mode==1 else 'avg' if mode==2 else 'simple'}, "
+          f"start_bin={start_bin}, {n_chirps} chirps")
 
     for c in range(n_chirps):
         # Index into input, skip start_bin
@@ -606,7 +627,7 @@ def run_range_bin_decimator(range_fft_i, range_fft_q,
                 # Averaging: sum group, then >> 4 (divide by 16)
                 sum_i = np.int64(0)
                 sum_q = np.int64(0)
-                for _ in range(decimation_factor):
+                for _s in range(decimation_factor):
                     if in_idx >= input_bins:
                         break
                     sum_i += int(range_fft_i[c, in_idx])
@@ -616,6 +637,9 @@ def run_range_bin_decimator(range_fft_i, range_fft_q,
                 decimated_i[c, obin] = int(sum_i) >> 4
                 decimated_q[c, obin] = int(sum_q) >> 4
 
+    print(f"  Decimated output: shape ({n_chirps}, {output_bins}), "
+          f"I range [{decimated_i.min()}, {decimated_i.max()}], "
+          f"Q range [{decimated_q.min()}, {decimated_q.max()}]")
 
     return decimated_i, decimated_q
 
@@ -641,6 +665,7 @@ def run_doppler_fft(range_data_i, range_data_q, twiddle_file_16=None):
     n_total = DOPPLER_TOTAL_BINS
     n_sf = CHIRPS_PER_SUBFRAME
 
+    print(f"[DOPPLER] Processing {n_range} range bins x {n_chirps} chirps → dual {n_fft}-point FFT")
 
     # Build 16-point Hamming window as signed 16-bit
     hamming = np.array([int(v) for v in HAMMING_Q15], dtype=np.int64)
@@ -650,9 +675,7 @@ def run_doppler_fft(range_data_i, range_data_q, twiddle_file_16=None):
     if twiddle_file_16 and os.path.exists(twiddle_file_16):
         cos_rom_16 = load_twiddle_rom(twiddle_file_16)
     else:
-        cos_rom_16 = np.round(
-            32767 * np.cos(2 * np.pi * np.arange(n_fft // 4) / n_fft)
-        ).astype(np.int64)
+        cos_rom_16 = np.round(32767 * np.cos(2 * np.pi * np.arange(n_fft // 4) / n_fft)).astype(np.int64)
 
     LOG2N_16 = 4
     doppler_map_i = np.zeros((n_range, n_total), dtype=np.int64)
@@ -724,6 +747,8 @@ def run_doppler_fft(range_data_i, range_data_q, twiddle_file_16=None):
                 doppler_map_i[rbin, bin_offset + n] = saturate(mem_re[n], 16)
                 doppler_map_q[rbin, bin_offset + n] = saturate(mem_im[n], 16)
 
+    print(f"  Doppler map: shape ({n_range}, {n_total}), "
+          f"I range [{doppler_map_i.min()}, {doppler_map_i.max()}]")
 
     return doppler_map_i, doppler_map_q
 
@@ -753,10 +778,12 @@ def run_mti_canceller(decim_i, decim_q, enable=True):
     mti_i = np.zeros_like(decim_i)
     mti_q = np.zeros_like(decim_q)
 
+    print(f"[MTI] 2-pulse canceller, enable={enable}, {n_chirps} chirps x {n_bins} bins")
 
     if not enable:
         mti_i[:] = decim_i
         mti_q[:] = decim_q
+        print("  Pass-through mode (MTI disabled)")
         return mti_i, mti_q
 
     for c in range(n_chirps):
@@ -772,6 +799,9 @@ def run_mti_canceller(decim_i, decim_q, enable=True):
                 mti_i[c, r] = saturate(diff_i, 16)
                 mti_q[c, r] = saturate(diff_q, 16)
 
+    print("  Chirp 0: muted (zeros)")
+    print(f"  Chirps 1-{n_chirps-1}: I range [{mti_i[1:].min()}, {mti_i[1:].max()}], "
+          f"Q range [{mti_q[1:].min()}, {mti_q[1:].max()}]")
     return mti_i, mti_q
 
 
@@ -798,12 +828,14 @@ def run_dc_notch(doppler_i, doppler_q, width=2):
       dc_notch_active = (width != 0) &&
                         (bin_within_sf < width || bin_within_sf > (15 - width + 1))
     """
-    _n_range, n_doppler = doppler_i.shape
+    n_range, n_doppler = doppler_i.shape
     notched_i = doppler_i.copy()
     notched_q = doppler_q.copy()
 
+    print(f"[DC NOTCH] width={width}, {n_range} range bins x {n_doppler} Doppler bins (dual sub-frame)")
 
     if width == 0:
+        print("  Pass-through (width=0)")
         return notched_i, notched_q
 
     zeroed_count = 0
@@ -815,6 +847,7 @@ def run_dc_notch(doppler_i, doppler_q, width=2):
             notched_q[:, dbin] = 0
             zeroed_count += 1
 
+    print(f"  Zeroed {zeroed_count} Doppler bin columns")
     return notched_i, notched_q
 
 
@@ -822,7 +855,7 @@ def run_dc_notch(doppler_i, doppler_q, width=2):
 # Stage 3e: CA-CFAR Detector (bit-accurate)
 # ===========================================================================
 def run_cfar_ca(doppler_i, doppler_q, guard=2, train=8,
-                alpha_q44=0x30, mode='CA', _simple_threshold=500):
+                alpha_q44=0x30, mode='CA', simple_threshold=500):
     """
     Bit-accurate model of cfar_ca.v — Cell-Averaging CFAR detector.
 
@@ -860,6 +893,9 @@ def run_cfar_ca(doppler_i, doppler_q, guard=2, train=8,
     if train == 0:
         train = 1
 
+    print(f"[CFAR] mode={mode}, guard={guard}, train={train}, "
+          f"alpha=0x{alpha_q44:02X} (Q4.4={alpha_q44/16:.2f}), "
+          f"{n_range} range x {n_doppler} Doppler")
 
     # Compute magnitudes: |I| + |Q| (17-bit unsigned, matching RTL L1 norm)
     # RTL: abs_i = I[15] ? (~I + 1) : I; abs_q = Q[15] ? (~Q + 1) : Q
@@ -927,6 +963,10 @@ def run_cfar_ca(doppler_i, doppler_q, guard=2, train=8,
             else:
                 noise_sum = leading_sum + lagging_sum  # Default to CA
 
+            # Threshold = (alpha * noise_sum) >> ALPHA_FRAC_BITS
+            # RTL: noise_product = r_alpha * noise_sum_reg (31-bit)
+            #      threshold = noise_product[ALPHA_FRAC_BITS +: MAG_WIDTH]
+            #      saturate if overflow
             noise_product = alpha_q44 * noise_sum
             threshold_raw = noise_product >> ALPHA_FRAC_BITS
 
@@ -934,12 +974,15 @@ def run_cfar_ca(doppler_i, doppler_q, guard=2, train=8,
             MAX_MAG = (1 << 17) - 1  # 131071
             threshold_val = MAX_MAG if threshold_raw > MAX_MAG else int(threshold_raw)
 
+            # Detection: magnitude > threshold
             if int(col[cut_idx]) > threshold_val:
                 detect_flags[cut_idx, dbin] = True
                 total_detections += 1
 
             thresholds[cut_idx, dbin] = threshold_val
 
+    print(f"  Total detections: {total_detections}")
+    print(f"  Magnitude range: [{magnitudes.min()}, {magnitudes.max()}]")
 
     return detect_flags, magnitudes, thresholds
 
@@ -953,16 +996,19 @@ def run_detection(doppler_i, doppler_q, threshold=10000):
     cfar_mag = |I| + |Q| (17-bit)
     detection if cfar_mag > threshold
     """
+    print(f"[DETECT] Running magnitude threshold detection (threshold={threshold})")
     
     mag = np.abs(doppler_i) + np.abs(doppler_q)  # L1 norm (|I| + |Q|)
     detections = np.argwhere(mag > threshold)
     
+    print(f"  {len(detections)} detections found")
     for d in detections[:20]:  # Print first 20
         rbin, dbin = d
-        mag[rbin, dbin]
+        m = mag[rbin, dbin]
+        print(f"    Range bin {rbin}, Doppler bin {dbin}: magnitude {m}")
     
     if len(detections) > 20:
-        pass
+        print(f"    ... and {len(detections) - 20} more")
     
     return mag, detections
 
@@ -976,6 +1022,7 @@ def run_float_reference(iq_i, iq_q):
     Uses the exact same RTL Hamming window coefficients (Q15) to isolate
     only the FFT fixed-point quantization error.
     """
+    print("\n[FLOAT REF] Running floating-point reference pipeline")
     
     n_chirps, n_samples = iq_i.shape[0], iq_i.shape[1] if iq_i.ndim == 2 else len(iq_i)
     
@@ -1023,6 +1070,8 @@ def write_hex_files(output_dir, iq_i, iq_q, prefix="stim"):
                 fi.write(signed_to_hex(int(iq_i[n]), 16) + '\n')
                 fq.write(signed_to_hex(int(iq_q[n]), 16) + '\n')
         
+        print(f"  Wrote {fn_i} ({n_samples} samples)")
+        print(f"  Wrote {fn_q} ({n_samples} samples)")
     
     elif iq_i.ndim == 2:
         n_rows, n_cols = iq_i.shape
@@ -1036,6 +1085,8 @@ def write_hex_files(output_dir, iq_i, iq_q, prefix="stim"):
                     fi.write(signed_to_hex(int(iq_i[r, c]), 16) + '\n')
                     fq.write(signed_to_hex(int(iq_q[r, c]), 16) + '\n')
         
+        print(f"  Wrote {fn_i} ({n_rows}x{n_cols} = {n_rows * n_cols} samples)")
+        print(f"  Wrote {fn_q} ({n_rows}x{n_cols} = {n_rows * n_cols} samples)")
 
 
 def write_adc_hex(output_dir, adc_data, prefix="adc_stim"):
@@ -1047,12 +1098,13 @@ def write_adc_hex(output_dir, adc_data, prefix="adc_stim"):
         for n in range(len(adc_data)):
             f.write(format(int(adc_data[n]) & 0xFF, '02X') + '\n')
     
+    print(f"  Wrote {fn} ({len(adc_data)} samples)")
 
 
 # ===========================================================================
 # Comparison metrics
 # ===========================================================================
-def compare_outputs(_name, fixed_i, fixed_q, float_i, float_q):
+def compare_outputs(name, fixed_i, fixed_q, float_i, float_q):
     """Compare fixed-point outputs against floating-point reference.
     
     Reports two metrics:
@@ -1068,7 +1120,7 @@ def compare_outputs(_name, fixed_i, fixed_q, float_i, float_q):
     
     # Count saturated bins
     sat_mask = (np.abs(fi) >= 32767) | (np.abs(fq) >= 32767)
-    np.sum(sat_mask)
+    n_saturated = np.sum(sat_mask)
     
     # Complex error — overall
     fixed_complex = fi + 1j * fq
@@ -1077,8 +1129,8 @@ def compare_outputs(_name, fixed_i, fixed_q, float_i, float_q):
     
     signal_power = np.mean(np.abs(ref_complex) ** 2) + 1e-30
     noise_power = np.mean(np.abs(error) ** 2) + 1e-30
-    10 * np.log10(signal_power / noise_power)
-    np.max(np.abs(error))
+    snr_db = 10 * np.log10(signal_power / noise_power)
+    max_error = np.max(np.abs(error))
     
     # Non-saturated comparison
     non_sat = ~sat_mask
@@ -1087,10 +1139,17 @@ def compare_outputs(_name, fixed_i, fixed_q, float_i, float_q):
         sig_ns = np.mean(np.abs(ref_complex[non_sat]) ** 2) + 1e-30
         noise_ns = np.mean(np.abs(error_ns) ** 2) + 1e-30
         snr_ns = 10 * np.log10(sig_ns / noise_ns)
-        np.max(np.abs(error_ns))
+        max_err_ns = np.max(np.abs(error_ns))
     else:
         snr_ns = 0.0
+        max_err_ns = 0.0
     
+    print(f"\n  [{name}] Comparison ({n} points):")
+    print(f"    Saturated:           {n_saturated}/{n} ({100.0*n_saturated/n:.2f}%)")
+    print(f"    Overall SNR:         {snr_db:.1f} dB")
+    print(f"    Overall max error:   {max_error:.1f}")
+    print(f"    Non-sat SNR:         {snr_ns:.1f} dB")
+    print(f"    Non-sat max error:   {max_err_ns:.1f}")
     
     return snr_ns  # Return the meaningful metric
 
@@ -1102,12 +1161,7 @@ def main():
     parser = argparse.ArgumentParser(description="AERIS-10 FPGA golden reference model")
     parser.add_argument('--frame', type=int, default=0, help='Frame index to process')
     parser.add_argument('--plot', action='store_true', help='Show plots')
-    parser.add_argument(
-        '--threshold',
-        type=int,
-        default=10000,
-        help='Detection threshold (L1 magnitude)'
-    )
+    parser.add_argument('--threshold', type=int, default=10000, help='Detection threshold (L1 magnitude)')
     args = parser.parse_args()
     
     # Paths
@@ -1115,14 +1169,14 @@ def main():
     fpga_dir = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
     data_base = os.path.expanduser("~/Downloads/adi_radar_data")
     amp_data = os.path.join(data_base, "amp_radar", "phaser_amp_4MSPS_500M_300u_256_m3dB.npy")
-    amp_config = os.path.join(
-        data_base,
-        "amp_radar",
-        "phaser_amp_4MSPS_500M_300u_256_m3dB_config.npy"
-    )
+    amp_config = os.path.join(data_base, "amp_radar", "phaser_amp_4MSPS_500M_300u_256_m3dB_config.npy")
     twiddle_1024 = os.path.join(fpga_dir, "fft_twiddle_1024.mem")
     output_dir = os.path.join(script_dir, "hex")
     
+    print("=" * 72)
+    print("AERIS-10 FPGA Golden Reference Model")
+    print("Using ADI CN0566 Phaser Radar Data (10.525 GHz X-band FMCW)")
+    print("=" * 72)
     
     # -----------------------------------------------------------------------
     # Load and quantize ADI data
@@ -1132,10 +1186,16 @@ def main():
     )
     
     # iq_i, iq_q: (32, 1024) int64, 16-bit range — post-DDC equivalent
+    print(f"\n{'=' * 72}")
+    print("Stage 0: Data loaded and quantized to 16-bit signed")
+    print(f"  IQ block shape: ({iq_i.shape[0]}, {iq_i.shape[1]})")
+    print(f"  ADC stimulus: {len(adc_8bit)} samples (8-bit unsigned)")
     
     # -----------------------------------------------------------------------
     # Write stimulus files
     # -----------------------------------------------------------------------
+    print(f"\n{'=' * 72}")
+    print("Writing hex stimulus files for RTL testbenches")
     
     # Post-DDC IQ for each chirp (for FFT + Doppler validation)
     write_hex_files(output_dir, iq_i, iq_q, "post_ddc")
@@ -1149,6 +1209,8 @@ def main():
     # -----------------------------------------------------------------------
     # Run range FFT on first chirp (bit-accurate)
     # -----------------------------------------------------------------------
+    print(f"\n{'=' * 72}")
+    print("Stage 2: Range FFT (1024-point, bit-accurate)")
     range_fft_i, range_fft_q = run_range_fft(iq_i[0], iq_q[0], twiddle_1024)
     write_hex_files(output_dir, range_fft_i, range_fft_q, "range_fft_chirp0")
     
@@ -1156,16 +1218,20 @@ def main():
     all_range_i = np.zeros((DOPPLER_CHIRPS, FFT_SIZE), dtype=np.int64)
     all_range_q = np.zeros((DOPPLER_CHIRPS, FFT_SIZE), dtype=np.int64)
     
+    print(f"\n  Running range FFT for all {DOPPLER_CHIRPS} chirps...")
     for c in range(DOPPLER_CHIRPS):
         ri, rq = run_range_fft(iq_i[c], iq_q[c], twiddle_1024)
         all_range_i[c] = ri
         all_range_q[c] = rq
         if (c + 1) % 8 == 0:
-            pass
+            print(f"    Chirp {c + 1}/{DOPPLER_CHIRPS} done")
     
     # -----------------------------------------------------------------------
     # Run Doppler FFT (bit-accurate) — "direct" path (first 64 bins)
     # -----------------------------------------------------------------------
+    print(f"\n{'=' * 72}")
+    print("Stage 3: Doppler FFT (dual 16-point with Hamming window)")
+    print("  [direct path: first 64 range bins, no decimation]")
     twiddle_16 = os.path.join(fpga_dir, "fft_twiddle_16.mem")
     doppler_i, doppler_q = run_doppler_fft(all_range_i, all_range_q, twiddle_file_16=twiddle_16)
     write_hex_files(output_dir, doppler_i, doppler_q, "doppler_map")
@@ -1175,6 +1241,8 @@ def main():
     # This models the actual RTL data flow:
     #   range FFT → range_bin_decimator (peak detection) → Doppler
     # -----------------------------------------------------------------------
+    print(f"\n{'=' * 72}")
+    print("Stage 2b: Range Bin Decimator (1024 → 64, peak detection)")
     
     decim_i, decim_q = run_range_bin_decimator(
         all_range_i, all_range_q,
@@ -1194,11 +1262,14 @@ def main():
                 q_val = int(all_range_q[c, b]) & 0xFFFF
                 packed = (q_val << 16) | i_val
                 f.write(f"{packed:08X}\n")
+    print(f"  Wrote {fc_input_file} ({DOPPLER_CHIRPS * FFT_SIZE} packed IQ words)")
     
     # Write decimated output reference for standalone decimator test
     write_hex_files(output_dir, decim_i, decim_q, "decimated_range")
     
     # Now run Doppler on the decimated data — this is the full-chain reference
+    print(f"\n{'=' * 72}")
+    print("Stage 3b: Doppler FFT on decimated data (full-chain path)")
     fc_doppler_i, fc_doppler_q = run_doppler_fft(
         decim_i, decim_q, twiddle_file_16=twiddle_16
     )
@@ -1213,6 +1284,7 @@ def main():
                 q_val = int(fc_doppler_q[rbin, dbin]) & 0xFFFF
                 packed = (q_val << 16) | i_val
                 f.write(f"{packed:08X}\n")
+    print(f"  Wrote {fc_doppler_packed_file} ({DOPPLER_RANGE_BINS * DOPPLER_TOTAL_BINS} packed IQ words)")
     
     # Save numpy arrays for the full-chain path
     np.save(os.path.join(output_dir, "decimated_range_i.npy"), decim_i)
@@ -1225,12 +1297,16 @@ def main():
     # This models the complete RTL data flow:
     #   range FFT → decimator → MTI canceller → Doppler → DC notch → CFAR
     # -----------------------------------------------------------------------
+    print(f"\n{'=' * 72}")
+    print("Stage 3c: MTI Canceller (2-pulse, on decimated data)")
     mti_i, mti_q = run_mti_canceller(decim_i, decim_q, enable=True)
     write_hex_files(output_dir, mti_i, mti_q, "fullchain_mti_ref")
     np.save(os.path.join(output_dir, "fullchain_mti_i.npy"), mti_i)
     np.save(os.path.join(output_dir, "fullchain_mti_q.npy"), mti_q)
     
     # Doppler on MTI-filtered data
+    print(f"\n{'=' * 72}")
+    print("Stage 3b+c: Doppler FFT on MTI-filtered decimated data")
     mti_doppler_i, mti_doppler_q = run_doppler_fft(
         mti_i, mti_q, twiddle_file_16=twiddle_16
     )
@@ -1240,6 +1316,8 @@ def main():
     
     # DC notch on MTI-Doppler data
     DC_NOTCH_WIDTH = 2  # Default test value: zero bins {0, 1, 31}
+    print(f"\n{'=' * 72}")
+    print(f"Stage 3d: DC Notch Filter (width={DC_NOTCH_WIDTH})")
     notched_i, notched_q = run_dc_notch(mti_doppler_i, mti_doppler_q, width=DC_NOTCH_WIDTH)
     write_hex_files(output_dir, notched_i, notched_q, "fullchain_notched_ref")
     
@@ -1252,12 +1330,15 @@ def main():
                 q_val = int(notched_q[rbin, dbin]) & 0xFFFF
                 packed = (q_val << 16) | i_val
                 f.write(f"{packed:08X}\n")
+    print(f"  Wrote {fc_notched_packed_file} ({DOPPLER_RANGE_BINS * DOPPLER_TOTAL_BINS} packed IQ words)")
     
     # CFAR on DC-notched data
     CFAR_GUARD = 2
     CFAR_TRAIN = 8
     CFAR_ALPHA = 0x30  # Q4.4 = 3.0
     CFAR_MODE = 'CA'
+    print(f"\n{'=' * 72}")
+    print(f"Stage 3e: CA-CFAR (guard={CFAR_GUARD}, train={CFAR_TRAIN}, alpha=0x{CFAR_ALPHA:02X})")
     cfar_flags, cfar_mag, cfar_thr = run_cfar_ca(
         notched_i, notched_q,
         guard=CFAR_GUARD, train=CFAR_TRAIN,
@@ -1272,6 +1353,7 @@ def main():
             for dbin in range(DOPPLER_TOTAL_BINS):
                 m = int(cfar_mag[rbin, dbin]) & 0x1FFFF
                 f.write(f"{m:05X}\n")
+    print(f"  Wrote {cfar_mag_file} ({DOPPLER_RANGE_BINS * DOPPLER_TOTAL_BINS} mag values)")
     
     # 2. Threshold map (17-bit unsigned)
     cfar_thr_file = os.path.join(output_dir, "fullchain_cfar_thr.hex")
@@ -1280,6 +1362,7 @@ def main():
             for dbin in range(DOPPLER_TOTAL_BINS):
                 t = int(cfar_thr[rbin, dbin]) & 0x1FFFF
                 f.write(f"{t:05X}\n")
+    print(f"  Wrote {cfar_thr_file} ({DOPPLER_RANGE_BINS * DOPPLER_TOTAL_BINS} threshold values)")
     
     # 3. Detection flags (1-bit per cell)
     cfar_det_file = os.path.join(output_dir, "fullchain_cfar_det.hex")
@@ -1288,6 +1371,7 @@ def main():
             for dbin in range(DOPPLER_TOTAL_BINS):
                 d = 1 if cfar_flags[rbin, dbin] else 0
                 f.write(f"{d:01X}\n")
+    print(f"  Wrote {cfar_det_file} ({DOPPLER_RANGE_BINS * DOPPLER_TOTAL_BINS} detection flags)")
     
     # 4. Detection list (text)
     cfar_detections = np.argwhere(cfar_flags)
@@ -1295,14 +1379,12 @@ def main():
     with open(cfar_det_list_file, 'w') as f:
         f.write("# AERIS-10 Full-Chain CFAR Detection List\n")
         f.write(f"# Chain: decim -> MTI -> Doppler -> DC notch(w={DC_NOTCH_WIDTH}) -> CA-CFAR\n")
-        f.write(
-            f"# CFAR: guard={CFAR_GUARD}, train={CFAR_TRAIN}, "
-            f"alpha=0x{CFAR_ALPHA:02X}, mode={CFAR_MODE}\n"
-        )
+        f.write(f"# CFAR: guard={CFAR_GUARD}, train={CFAR_TRAIN}, alpha=0x{CFAR_ALPHA:02X}, mode={CFAR_MODE}\n")
         f.write("# Format: range_bin doppler_bin magnitude threshold\n")
         for det in cfar_detections:
             r, d = det
             f.write(f"{r} {d} {cfar_mag[r, d]} {cfar_thr[r, d]}\n")
+    print(f"  Wrote {cfar_det_list_file} ({len(cfar_detections)} detections)")
     
     # Save numpy arrays
     np.save(os.path.join(output_dir, "fullchain_cfar_mag.npy"), cfar_mag)
@@ -1310,6 +1392,8 @@ def main():
     np.save(os.path.join(output_dir, "fullchain_cfar_flags.npy"), cfar_flags)
     
     # Run detection on full-chain Doppler map
+    print(f"\n{'=' * 72}")
+    print("Stage 4: Detection on full-chain Doppler map")
     fc_mag, fc_detections = run_detection(fc_doppler_i, fc_doppler_q, threshold=args.threshold)
     
     # Save full-chain detection reference
@@ -1321,6 +1405,7 @@ def main():
         for d in fc_detections:
             rbin, dbin = d
             f.write(f"{rbin} {dbin} {fc_mag[rbin, dbin]}\n")
+    print(f"  Wrote {fc_det_file} ({len(fc_detections)} detections)")
     
     # Also write detection reference as hex for RTL comparison
     fc_det_mag_file = os.path.join(output_dir, "fullchain_detection_mag.hex")
@@ -1329,10 +1414,13 @@ def main():
             for dbin in range(DOPPLER_TOTAL_BINS):
                 m = int(fc_mag[rbin, dbin]) & 0x1FFFF  # 17-bit unsigned
                 f.write(f"{m:05X}\n")
+    print(f"  Wrote {fc_det_mag_file} ({DOPPLER_RANGE_BINS * DOPPLER_TOTAL_BINS} magnitude values)")
     
     # -----------------------------------------------------------------------
     # Run detection on direct-path Doppler map (for backward compatibility)
     # -----------------------------------------------------------------------
+    print(f"\n{'=' * 72}")
+    print("Stage 4b: Detection on direct-path Doppler map")
     mag, detections = run_detection(doppler_i, doppler_q, threshold=args.threshold)
     
     # Save detection list
@@ -1344,23 +1432,26 @@ def main():
         for d in detections:
             rbin, dbin = d
             f.write(f"{rbin} {dbin} {mag[rbin, dbin]}\n")
+    print(f"  Wrote {det_file} ({len(detections)} detections)")
     
     # -----------------------------------------------------------------------
     # Float reference and comparison
     # -----------------------------------------------------------------------
+    print(f"\n{'=' * 72}")
+    print("Comparison: Fixed-point vs Float reference")
     
     range_fft_float, doppler_float = run_float_reference(iq_i, iq_q)
     
     # Compare range FFT (chirp 0)
     float_range_i = np.real(range_fft_float[0, :]).astype(np.float64)
     float_range_q = np.imag(range_fft_float[0, :]).astype(np.float64)
-    compare_outputs("Range FFT", range_fft_i, range_fft_q,
+    snr_range = compare_outputs("Range FFT", range_fft_i, range_fft_q,
                                 float_range_i, float_range_q)
     
     # Compare Doppler map
     float_doppler_i = np.real(doppler_float).flatten().astype(np.float64)
     float_doppler_q = np.imag(doppler_float).flatten().astype(np.float64)
-    compare_outputs("Doppler FFT", 
+    snr_doppler = compare_outputs("Doppler FFT", 
                                    doppler_i.flatten(), doppler_q.flatten(),
                                    float_doppler_i, float_doppler_q)
     
@@ -1372,10 +1463,26 @@ def main():
     np.save(os.path.join(output_dir, "doppler_map_i.npy"), doppler_i)
     np.save(os.path.join(output_dir, "doppler_map_q.npy"), doppler_q)
     np.save(os.path.join(output_dir, "detection_mag.npy"), mag)
+    print(f"\n  Saved numpy reference files to {output_dir}/")
     
     # -----------------------------------------------------------------------
     # Summary
     # -----------------------------------------------------------------------
+    print(f"\n{'=' * 72}")
+    print("SUMMARY")
+    print(f"{'=' * 72}")
+    print(f"  ADI dataset: frame {args.frame} of amp_radar (CN0566, 10.525 GHz)")
+    print(f"  Chirps processed: {DOPPLER_CHIRPS}")
+    print(f"  Samples/chirp: {FFT_SIZE}")
+    print(f"  Range FFT: {FFT_SIZE}-point → {snr_range:.1f} dB vs float")
+    print(f"  Doppler FFT (direct): {DOPPLER_FFT_SIZE}-point Hamming → {snr_doppler:.1f} dB vs float")
+    print(f"  Detections (direct): {len(detections)} (threshold={args.threshold})")
+    print("  Full-chain decimator: 1024→64 peak detection")
+    print(f"  Full-chain detections: {len(fc_detections)} (threshold={args.threshold})")
+    print(f"  MTI+CFAR chain: decim → MTI → Doppler → DC notch(w={DC_NOTCH_WIDTH}) → CA-CFAR")
+    print(f"  CFAR detections: {len(cfar_detections)} (guard={CFAR_GUARD}, train={CFAR_TRAIN}, alpha=0x{CFAR_ALPHA:02X})")
+    print(f"  Hex stimulus files: {output_dir}/")
+    print("  Ready for RTL co-simulation with Icarus Verilog")
     
     # -----------------------------------------------------------------------
     # Optional plots
@@ -1426,10 +1533,11 @@ def main():
             plt.tight_layout()
             plot_file = os.path.join(output_dir, "golden_reference_plots.png")
             plt.savefig(plot_file, dpi=150)
+            print(f"\n  Saved plots to {plot_file}")
             plt.show()
             
         except ImportError:
-            pass
+            print("\n  [WARN] matplotlib not available, skipping plots")
 
 
 if __name__ == "__main__":

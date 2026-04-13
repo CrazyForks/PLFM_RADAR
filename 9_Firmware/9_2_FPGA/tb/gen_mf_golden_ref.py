@@ -147,6 +147,7 @@ def main():
     # =========================================================================
     # Case 2: Tone autocorrelation at bin 5
     # Signal and reference: complex tone at bin 5, amplitude 8000 (Q15)
+    # sig[n] = 8000 * exp(j * 2*pi*5*n/N)
     # Autocorrelation of a tone => peak at bin 0 (lag 0)
     # =========================================================================
     amp = 8000.0
@@ -240,12 +241,28 @@ def main():
     # =========================================================================
     # Print summary to stdout
     # =========================================================================
+    print("=" * 72)
+    print("Matched Filter Golden Reference Generator")
+    print(f"Output directory: {outdir}")
+    print(f"FFT length: {N}")
+    print("=" * 72)
 
-    for _ in summaries:
-        pass
+    for s in summaries:
+        print()
+        print(f"Case {s['case']}: {s['description']}")
+        print(f"  Peak bin:              {s['peak_bin']}")
+        print(f"  Peak magnitude (float):{s['peak_mag_float']:.6f}")
+        print(f"  Peak I (float):        {s['peak_i_float']:.6f}")
+        print(f"  Peak Q (float):        {s['peak_q_float']:.6f}")
+        print(f"  Peak I (quantized):    {s['peak_i_quant']}")
+        print(f"  Peak Q (quantized):    {s['peak_q_quant']}")
 
-    for _ in all_files:
-        pass
+    print()
+    print(f"Generated {len(all_files)} files:")
+    for fname in all_files:
+        print(f"  {fname}")
+    print()
+    print("Done.")
 
 
 if __name__ == "__main__":

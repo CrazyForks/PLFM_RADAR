@@ -51,6 +51,7 @@ def write_hex_32bit(filepath, samples):
         for (i_val, q_val) in samples:
             packed = ((q_val & 0xFFFF) << 16) | (i_val & 0xFFFF)
             f.write(f"{packed:08X}\n")
+    print(f"  Wrote {len(samples)} packed samples to {filepath}")
 
 
 def write_csv(filepath, headers, *columns):
@@ -60,6 +61,7 @@ def write_csv(filepath, headers, *columns):
         for i in range(len(columns[0])):
             row = ','.join(str(col[i]) for col in columns)
             f.write(row + '\n')
+    print(f"  Wrote {len(columns[0])} rows to {filepath}")
 
 
 def write_hex_16bit(filepath, data):
@@ -116,10 +118,15 @@ SCENARIOS = {
 
 def generate_scenario(name, targets, description, base_dir):
     """Generate input hex + golden output for one scenario."""
+    print(f"\n{'='*60}")
+    print(f"Scenario: {name} — {description}")
+    print("Model: CLEAN (dual 16-pt FFT)")
+    print(f"{'='*60}")
 
     # Generate Doppler frame (32 chirps x 64 range bins)
     frame_i, frame_q = generate_doppler_frame(targets, seed=42)
 
+    print(f"  Generated frame: {len(frame_i)} chirps x {len(frame_i[0])} range bins")
 
     # ---- Write input hex file (packed 32-bit: {Q, I}) ----
     # RTL expects data streamed chirp-by-chirp: chirp0[rb0..rb63], chirp1[rb0..rb63], ...
@@ -137,6 +144,8 @@ def generate_scenario(name, targets, description, base_dir):
     dp = DopplerProcessor()
     doppler_i, doppler_q = dp.process_frame(frame_i, frame_q)
 
+    print(f"  Doppler output: {len(doppler_i)} range bins x "
+          f"{len(doppler_i[0])} doppler bins (2 sub-frames x {DOPPLER_FFT_SIZE})")
 
     # ---- Write golden output CSV ----
     # Format: range_bin, doppler_bin, out_i, out_q
@@ -164,6 +173,7 @@ def generate_scenario(name, targets, description, base_dir):
     write_hex_32bit(golden_hex, list(zip(flat_i, flat_q, strict=False)))
 
     # ---- Find peak per range bin ----
+    print("\n  Peak Doppler bins per range bin (top 5 by magnitude):")
     peak_info = []
     for rbin in range(RANGE_BINS):
         mags = [abs(doppler_i[rbin][d]) + abs(doppler_q[rbin][d])
@@ -174,11 +184,13 @@ def generate_scenario(name, targets, description, base_dir):
 
     # Sort by magnitude descending, show top 5
     peak_info.sort(key=lambda x: -x[2])
-    for rbin, dbin, _mag in peak_info[:5]:
-        doppler_i[rbin][dbin]
-        doppler_q[rbin][dbin]
-        dbin // DOPPLER_FFT_SIZE
-        dbin % DOPPLER_FFT_SIZE
+    for rbin, dbin, mag in peak_info[:5]:
+        i_val = doppler_i[rbin][dbin]
+        q_val = doppler_q[rbin][dbin]
+        sf = dbin // DOPPLER_FFT_SIZE
+        bin_in_sf = dbin % DOPPLER_FFT_SIZE
+        print(f"    rbin={rbin:2d}, dbin={dbin:2d} (sf{sf}:{bin_in_sf:2d}), mag={mag:6d}, "
+              f"I={i_val:6d}, Q={q_val:6d}")
 
     return {
         'name': name,
@@ -190,6 +202,10 @@ def generate_scenario(name, targets, description, base_dir):
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
 
+    print("=" * 60)
+    print("Doppler Processor Co-Sim Golden Reference Generator")
+    print(f"Architecture: dual {DOPPLER_FFT_SIZE}-pt FFT ({DOPPLER_TOTAL_BINS} total bins)")
+    print("=" * 60)
 
     scenarios_to_run = list(SCENARIOS.keys())
 
@@ -207,9 +223,17 @@ def main():
         r = generate_scenario(name, targets, description, base_dir)
         results.append(r)
 
-    for _ in results:
-        pass
+    print(f"\n{'='*60}")
+    print("Summary:")
+    print(f"{'='*60}")
+    for r in results:
+        print(f"  {r['name']:<15s} top peak: "
+              f"rbin={r['peak_info'][0][0]}, dbin={r['peak_info'][0][1]}, "
+              f"mag={r['peak_info'][0][2]}")
 
+    print(f"\nGenerated {len(results)} scenarios.")
+    print(f"Files written to: {base_dir}")
+    print("=" * 60)
 
 
 if __name__ == '__main__':

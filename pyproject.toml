@@ -49,5 +49,7 @@ select = [
 "**/test_*.py" = ["ARG", "T20", "ERA"]
 # Re-export modules: unused imports are intentional
 "**/v7/hardware.py" = ["F401"]
-# CLI tool: print() is the intentional output mechanism
+# CLI tools & cosim scripts: print() is the intentional output mechanism
 "**/uart_capture.py" = ["T20"]
+"**/tb/cosim/**" = ["T20", "ERA", "ARG", "E501"]
+"**/tb/gen_mf_golden_ref.py" = ["T20", "ERA"]

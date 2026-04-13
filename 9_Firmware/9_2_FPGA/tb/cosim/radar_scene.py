@@ -163,7 +163,7 @@ def generate_if_chirp(n_samples, chirp_bw=CHIRP_BW, f_if=F_IF, fs=FS_ADC):
     return chirp_i, chirp_q
 
 
-def generate_reference_chirp_q15(n_fft=FFT_SIZE, chirp_bw=CHIRP_BW, _f_if=F_IF, _fs=FS_ADC):
+def generate_reference_chirp_q15(n_fft=FFT_SIZE, chirp_bw=CHIRP_BW, f_if=F_IF, fs=FS_ADC):
     """
     Generate a reference chirp in Q15 format for the matched filter.
 
@@ -398,6 +398,7 @@ def generate_doppler_frame(targets, n_chirps=CHIRPS_PER_FRAME,
         for target in targets:
             # Which range bin does this target fall in?
             # After matched filter + range decimation:
+            # range_bin = target_delay_in_baseband_samples / decimation_factor
             delay_baseband_samples = target.delay_s * FS_SYS
             range_bin_float = delay_baseband_samples * n_range_bins / FFT_SIZE
             range_bin = round(range_bin_float)
@@ -405,6 +406,7 @@ def generate_doppler_frame(targets, n_chirps=CHIRPS_PER_FRAME,
             if range_bin < 0 or range_bin >= n_range_bins:
                 continue
 
+            # Amplitude (simplified)
             amp = target.amplitude / 4.0
 
             # Doppler phase for this chirp.
@@ -472,6 +474,7 @@ def write_hex_file(filepath, samples, bits=8):
                 val = s & ((1 << bits) - 1)
             f.write(fmt.format(val) + "\n")
 
+    print(f"  Wrote {len(samples)} samples to {filepath}")
 
 
 def write_csv_file(filepath, columns, headers=None):
@@ -491,6 +494,7 @@ def write_csv_file(filepath, columns, headers=None):
             row = [str(col[i]) for col in columns]
             f.write(",".join(row) + "\n")
 
+    print(f"  Wrote {n_rows} rows to {filepath}")
 
 
 # =============================================================================
@@ -503,6 +507,10 @@ def scenario_single_target(range_m=500, velocity=0, rcs=0, n_adc_samples=16384):
     Good for validating matched filter range response.
     """
     target = Target(range_m=range_m, velocity_mps=velocity, rcs_dbsm=rcs)
+    print(f"Scenario: Single target at {range_m}m")
+    print(f"  {target}")
+    print(f"  Beat freq: {CHIRP_BW / T_LONG_CHIRP * target.delay_s:.0f} Hz")
+    print(f"  Delay: {target.delay_samples:.1f} ADC samples")
 
     adc = generate_adc_samples([target], n_adc_samples, noise_stddev=2.0)
     return adc, [target]
@@ -517,8 +525,9 @@ def scenario_two_targets(n_adc_samples=16384):
         Target(range_m=300, velocity_mps=0, rcs_dbsm=10, phase_deg=0),
         Target(range_m=315, velocity_mps=0, rcs_dbsm=10, phase_deg=45),
     ]
-    for _t in targets:
-        pass
+    print("Scenario: Two targets (range resolution test)")
+    for t in targets:
+        print(f"  {t}")
 
     adc = generate_adc_samples(targets, n_adc_samples, noise_stddev=2.0)
     return adc, targets
@@ -535,8 +544,9 @@ def scenario_multi_target(n_adc_samples=16384):
         Target(range_m=2000, velocity_mps=50, rcs_dbsm=0, phase_deg=45),
         Target(range_m=5000, velocity_mps=-5, rcs_dbsm=-5, phase_deg=270),
     ]
-    for _t in targets:
-        pass
+    print("Scenario: Multi-target (5 targets)")
+    for t in targets:
+        print(f"  {t}")
 
     adc = generate_adc_samples(targets, n_adc_samples, noise_stddev=3.0)
     return adc, targets
@@ -546,6 +556,7 @@ def scenario_noise_only(n_adc_samples=16384, noise_stddev=5.0):
     """
     Noise-only scene — baseline for false alarm characterization.
     """
+    print(f"Scenario: Noise only (stddev={noise_stddev})")
     adc = generate_adc_samples([], n_adc_samples, noise_stddev=noise_stddev)
     return adc, []
 
@@ -554,6 +565,7 @@ def scenario_dc_tone(n_adc_samples=16384, adc_value=128):
     """
     DC input — validates CIC decimation and DC response.
     """
+    print(f"Scenario: DC tone (ADC value={adc_value})")
     return [adc_value] * n_adc_samples, []
 
 
@@ -561,6 +573,7 @@ def scenario_sine_wave(n_adc_samples=16384, freq_hz=1e6, amplitude=50):
     """
     Pure sine wave at ADC input — validates NCO/mixer frequency response.
     """
+    print(f"Scenario: Sine wave at {freq_hz/1e6:.1f} MHz, amplitude={amplitude}")
     adc = []
     for n in range(n_adc_samples):
         t = n / FS_ADC
@@ -590,35 +603,46 @@ def generate_all_test_vectors(output_dir=None):
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(__file__))
 
+    print("=" * 60)
+    print("Generating AERIS-10 Test Vectors")
+    print(f"Output directory: {output_dir}")
+    print("=" * 60)
 
     n_adc = 16384  # ~41 us of ADC data
 
     # --- Scenario 1: Single target ---
+    print("\n--- Scenario 1: Single Target ---")
     adc1, targets1 = scenario_single_target(range_m=500, n_adc_samples=n_adc)
     write_hex_file(os.path.join(output_dir, "adc_single_target.hex"), adc1, bits=8)
 
     # --- Scenario 2: Multi-target ---
+    print("\n--- Scenario 2: Multi-Target ---")
     adc2, targets2 = scenario_multi_target(n_adc_samples=n_adc)
     write_hex_file(os.path.join(output_dir, "adc_multi_target.hex"), adc2, bits=8)
 
     # --- Scenario 3: Noise only ---
+    print("\n--- Scenario 3: Noise Only ---")
     adc3, _ = scenario_noise_only(n_adc_samples=n_adc)
     write_hex_file(os.path.join(output_dir, "adc_noise_only.hex"), adc3, bits=8)
 
     # --- Scenario 4: DC ---
+    print("\n--- Scenario 4: DC Input ---")
     adc4, _ = scenario_dc_tone(n_adc_samples=n_adc)
     write_hex_file(os.path.join(output_dir, "adc_dc.hex"), adc4, bits=8)
 
     # --- Scenario 5: Sine wave ---
+    print("\n--- Scenario 5: 1 MHz Sine ---")
     adc5, _ = scenario_sine_wave(n_adc_samples=n_adc, freq_hz=1e6, amplitude=50)
     write_hex_file(os.path.join(output_dir, "adc_sine_1mhz.hex"), adc5, bits=8)
 
     # --- Reference chirp for matched filter ---
+    print("\n--- Reference Chirp ---")
     ref_re, ref_im = generate_reference_chirp_q15()
     write_hex_file(os.path.join(output_dir, "ref_chirp_i.hex"), ref_re, bits=16)
     write_hex_file(os.path.join(output_dir, "ref_chirp_q.hex"), ref_im, bits=16)
 
     # --- Baseband samples for matched filter test (bypass DDC) ---
+    print("\n--- Baseband Samples (bypass DDC) ---")
     bb_targets = [
         Target(range_m=500, velocity_mps=0, rcs_dbsm=10),
         Target(range_m=1500, velocity_mps=20, rcs_dbsm=5),
@@ -628,6 +652,7 @@ def generate_all_test_vectors(output_dir=None):
     write_hex_file(os.path.join(output_dir, "bb_mf_test_q.hex"), bb_q, bits=16)
 
     # --- Scenario info CSV ---
+    print("\n--- Scenario Info ---")
     with open(os.path.join(output_dir, "scenario_info.txt"), 'w') as f:
         f.write("AERIS-10 Test Vector Scenarios\n")
         f.write("=" * 60 + "\n\n")
@@ -657,7 +682,11 @@ def generate_all_test_vectors(output_dir=None):
         for t in bb_targets:
             f.write(f"  {t}\n")
 
+    print(f"\n  Wrote scenario info to {os.path.join(output_dir, 'scenario_info.txt')}")
 
+    print("\n" + "=" * 60)
+    print("ALL TEST VECTORS GENERATED")
+    print("=" * 60)
 
     return {
         'adc_single': adc1,

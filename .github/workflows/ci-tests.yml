@@ -111,4 +111,5 @@ jobs:
         run: >
           uv run pytest
           9_Firmware/tests/cross_layer/test_cross_layer_contract.py
+          9_Firmware/tests/cross_layer/test_mem_validation.py
           -v --tb=short
