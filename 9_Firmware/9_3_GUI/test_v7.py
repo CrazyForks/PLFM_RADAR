@@ -666,6 +666,231 @@ class TestSoftwareFPGASignalChain(unittest.TestCase):
         self.assertEqual(frame_cfar.magnitude.shape, (64, 32))
 
 
+class TestGoldenReferenceReplayFixtures(unittest.TestCase):
+    """Golden replay fixtures and SoftwareFPGA smoke tests.
+
+    Phase C3 adds two fixture-integrity tests that verify the committed
+    `golden_reference.py` pipeline still reproduces the checked-in `.npy`
+    artifacts, plus one `SoftwareFPGA.process_chirps()` smoke test that checks
+    the GUI replay path still produces a valid `RadarFrame` shape.
+    """
+
+    COSIM_DIR = os.path.join(
+        os.path.dirname(__file__), "..", "9_2_FPGA", "tb", "cosim",
+        "real_data", "hex"
+    )
+
+    REQUIRED_COSIM_FILES = (
+        "range_fft_all_i.npy",
+        "range_fft_all_q.npy",
+        "decimated_range_i.npy",
+        "decimated_range_q.npy",
+        "fullchain_cfar_flags.npy",
+        "fullchain_cfar_mag.npy",
+    )
+
+    def _cosim_available(self):
+        return all(
+            os.path.isfile(os.path.join(self.COSIM_DIR, name))
+            for name in self.REQUIRED_COSIM_FILES
+        )
+
+    def _load(self, name):
+        return np.load(os.path.join(self.COSIM_DIR, name))
+
+    def test_decimator_matches_golden(self):
+        """Golden decimator helper must reproduce committed decimated output."""
+        if not self._cosim_available():
+            self.skipTest("co-sim data not found")
+        import sys as _sys
+        from pathlib import Path as _Path
+        _gr_dir = str(
+            _Path(__file__).resolve().parents[1]
+            / "9_2_FPGA" / "tb" / "cosim" / "real_data"
+        )
+        if _gr_dir not in _sys.path:
+            _sys.path.insert(0, _gr_dir)
+        from golden_reference import run_range_bin_decimator
+
+        range_i = self._load("range_fft_all_i.npy")
+        range_q = self._load("range_fft_all_q.npy")
+        expected_i = self._load("decimated_range_i.npy")
+        expected_q = self._load("decimated_range_q.npy")
+
+        got_i, got_q = run_range_bin_decimator(range_i, range_q)
+
+        np.testing.assert_array_equal(
+            got_i,
+            expected_i,
+            err_msg="Golden decimator I drifted from committed fixture",
+        )
+        np.testing.assert_array_equal(
+            got_q,
+            expected_q,
+            err_msg="Golden decimator Q drifted from committed fixture",
+        )
+
+    def test_full_chain_cfar_output_matches_golden(self):
+        """Golden full pipeline must reproduce committed CFAR golden data."""
+        if not self._cosim_available():
+            self.skipTest("co-sim data not found")
+        import sys as _sys
+        from pathlib import Path as _Path
+        _gr_dir = str(
+            _Path(__file__).resolve().parents[1]
+            / "9_2_FPGA" / "tb" / "cosim" / "real_data"
+        )
+        if _gr_dir not in _sys.path:
+            _sys.path.insert(0, _gr_dir)
+        from golden_reference import (
+            run_range_bin_decimator, run_mti_canceller,
+            run_doppler_fft, run_dc_notch, run_cfar_ca,
+        )
+
+        range_i = self._load("range_fft_all_i.npy")
+        range_q = self._load("range_fft_all_q.npy")
+        expected_flags = self._load("fullchain_cfar_flags.npy")
+        expected_mag = self._load("fullchain_cfar_mag.npy")
+
+        # Run the same chain as golden_reference.py:main()
+        twiddle_16 = os.path.join(
+            os.path.dirname(__file__), "..", "9_2_FPGA",
+            "fft_twiddle_16.mem",
+        )
+        if not os.path.exists(twiddle_16):
+            self.skipTest("fft_twiddle_16.mem not found")
+
+        dec_i, dec_q = run_range_bin_decimator(range_i, range_q)
+        mti_i, mti_q = run_mti_canceller(dec_i, dec_q, enable=True)
+        dop_i, dop_q = run_doppler_fft(
+            mti_i, mti_q, twiddle_file_16=twiddle_16,
+        )
+        notch_i, notch_q = run_dc_notch(dop_i, dop_q, width=2)
+        flags, mag, _thr = run_cfar_ca(
+            notch_i, notch_q, guard=2, train=8, alpha_q44=0x30, mode="CA",
+        )
+
+        np.testing.assert_array_equal(
+            flags,
+            expected_flags,
+            err_msg="Golden full-chain CFAR flags mismatch committed fixture",
+        )
+        np.testing.assert_array_equal(
+            mag,
+            expected_mag,
+            err_msg="Golden full-chain CFAR magnitudes mismatch committed fixture",
+        )
+
+    def test_software_fpga_frame_shape_from_range_fft(self):
+        """SoftwareFPGA.process_chirps on range_fft data produces correct shape.
+
+        NOTE: process_chirps re-runs the range FFT, so we can't feed it
+        post-FFT data and expect golden match.  This test verifies that the
+        RadarFrame output has the right shape and that the chain doesn't crash
+        when given realistic-amplitude input.
+        """
+        if not self._cosim_available():
+            self.skipTest("co-sim data not found")
+        from v7.software_fpga import SoftwareFPGA
+        from radar_protocol import RadarFrame
+
+        # Use decimated data padded to 1024 as input (so range FFT has content)
+        dec_i = self._load("decimated_range_i.npy")
+        dec_q = self._load("decimated_range_q.npy")
+        iq_i = np.zeros((32, 1024), dtype=np.int64)
+        iq_q = np.zeros((32, 1024), dtype=np.int64)
+        iq_i[:, :dec_i.shape[1]] = dec_i
+        iq_q[:, :dec_q.shape[1]] = dec_q
+
+        fpga = SoftwareFPGA()
+        fpga.set_mti_enable(True)
+        fpga.set_cfar_enable(True)
+        fpga.set_dc_notch_width(2)
+        frame = fpga.process_chirps(iq_i, iq_q, frame_number=99)
+
+        self.assertIsInstance(frame, RadarFrame)
+        self.assertEqual(frame.range_doppler_i.shape, (64, 32))
+        self.assertEqual(frame.magnitude.shape, (64, 32))
+        self.assertEqual(frame.detections.shape, (64, 32))
+        self.assertEqual(frame.range_profile.shape, (64,))
+        self.assertEqual(frame.frame_number, 99)
+
+    def test_software_fpga_wiring_matches_manual_chain(self):
+        """SoftwareFPGA.process_chirps must call stages in the correct order
+        with the correct parameters.
+
+        Feeds identical synthetic IQ through both SoftwareFPGA and a manual
+        golden_reference chain, then asserts the CFAR output matches.
+        This catches wiring bugs: wrong stage order, wrong default params,
+        missing DC notch, etc.
+        """
+        from v7.software_fpga import SoftwareFPGA, TWIDDLE_1024, TWIDDLE_16
+        if not os.path.exists(TWIDDLE_1024) or not os.path.exists(TWIDDLE_16):
+            self.skipTest("twiddle files not found")
+
+        import sys as _sys
+        from pathlib import Path as _Path
+        _gr_dir = str(
+            _Path(__file__).resolve().parents[1]
+            / "9_2_FPGA" / "tb" / "cosim" / "real_data"
+        )
+        if _gr_dir not in _sys.path:
+            _sys.path.insert(0, _gr_dir)
+        from golden_reference import (
+            run_range_fft, run_range_bin_decimator, run_mti_canceller,
+            run_doppler_fft, run_dc_notch, run_cfar_ca,
+        )
+
+        # Deterministic synthetic input — small int16 values to avoid overflow
+        rng = np.random.RandomState(42)
+        iq_i = rng.randint(-500, 500, size=(32, 1024), dtype=np.int64)
+        iq_q = rng.randint(-500, 500, size=(32, 1024), dtype=np.int64)
+
+        # --- SoftwareFPGA path (what we're testing) ---
+        fpga = SoftwareFPGA()
+        fpga.set_mti_enable(True)
+        fpga.set_cfar_enable(True)
+        fpga.set_dc_notch_width(2)
+        frame = fpga.process_chirps(iq_i.copy(), iq_q.copy(), frame_number=0)
+
+        # --- Manual golden_reference chain (ground truth) ---
+        range_i = np.zeros_like(iq_i)
+        range_q = np.zeros_like(iq_q)
+        for c in range(32):
+            range_i[c], range_q[c] = run_range_fft(
+                iq_i[c], iq_q[c], twiddle_file=TWIDDLE_1024,
+            )
+        dec_i, dec_q = run_range_bin_decimator(range_i, range_q)
+        mti_i, mti_q = run_mti_canceller(dec_i, dec_q, enable=True)
+        dop_i, dop_q = run_doppler_fft(
+            mti_i, mti_q, twiddle_file_16=TWIDDLE_16,
+        )
+        notch_i, notch_q = run_dc_notch(dop_i, dop_q, width=2)
+        flags, mag, _thr = run_cfar_ca(
+            notch_i, notch_q, guard=2, train=8, alpha_q44=0x30, mode="CA",
+        )
+
+        # --- Compare ---
+        np.testing.assert_array_equal(
+            frame.detections, flags.astype(np.uint8),
+            err_msg="SoftwareFPGA CFAR flags differ from manual chain",
+        )
+        np.testing.assert_array_equal(
+            frame.magnitude, mag.astype(np.float64),
+            err_msg="SoftwareFPGA CFAR magnitudes differ from manual chain",
+        )
+        expected_rd_i = np.clip(notch_i, -32768, 32767).astype(np.int16)
+        expected_rd_q = np.clip(notch_q, -32768, 32767).astype(np.int16)
+        np.testing.assert_array_equal(
+            frame.range_doppler_i, expected_rd_i,
+            err_msg="SoftwareFPGA range_doppler_i differs from manual chain",
+        )
+        np.testing.assert_array_equal(
+            frame.range_doppler_q, expected_rd_q,
+            err_msg="SoftwareFPGA range_doppler_q differs from manual chain",
+        )
+
+
 class TestQuantizeRawIQ(unittest.TestCase):
     """quantize_raw_iq utility function."""
 

@@ -316,6 +316,67 @@ run_mf_cosim() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: compile, run, and compare a Doppler co-sim scenario
+#   run_doppler_cosim <scenario_name> <define_flag>
+# ---------------------------------------------------------------------------
+run_doppler_cosim() {
+    local name="$1"
+    local define="$2"
+    local vvp="tb/tb_doppler_cosim_${name}.vvp"
+
+    printf "  %-45s " "Doppler Co-Sim ($name)"
+
+    # Compile — build command as string to handle optional define
+    local cmd="iverilog -g2001 -DSIMULATION"
+    if [[ -n "$define" ]]; then
+        cmd="$cmd $define"
+    fi
+    cmd="$cmd -o $vvp tb/tb_doppler_cosim.v doppler_processor.v xfft_16.v fft_engine.v"
+
+    if ! eval "$cmd" 2>/tmp/iverilog_err_$$; then
+        echo -e "${RED}COMPILE FAIL${NC}"
+        ERRORS="$ERRORS\n  Doppler Co-Sim ($name): compile error ($(head -1 /tmp/iverilog_err_$$))"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    # Run TB
+    local output
+    output=$(timeout 120 vvp "$vvp" 2>&1) || true
+    rm -f "$vvp"
+
+    # Check TB internal pass/fail
+    local tb_fail
+    tb_fail=$(echo "$output" | grep -Ec '^\[FAIL' || true)
+    if [[ "$tb_fail" -gt 0 ]]; then
+        echo -e "${RED}FAIL${NC} (TB internal failure)"
+        ERRORS="$ERRORS\n  Doppler Co-Sim ($name): TB internal failure"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    # Run Python compare
+    if command -v python3 >/dev/null 2>&1; then
+        local compare_out
+        local compare_rc=0
+        compare_out=$(python3 tb/cosim/compare_doppler.py "$name" 2>&1) || compare_rc=$?
+        if [[ "$compare_rc" -ne 0 ]]; then
+            echo -e "${RED}FAIL${NC} (compare_doppler.py mismatch)"
+            ERRORS="$ERRORS\n  Doppler Co-Sim ($name): Python compare failed"
+            FAIL=$((FAIL + 1))
+            return
+        fi
+    else
+        echo -e "${YELLOW}SKIP${NC} (RTL passed, python3 not found — compare skipped)"
+        SKIP=$((SKIP + 1))
+        return
+    fi
+
+    echo -e "${GREEN}PASS${NC} (RTL + Python compare)"
+    PASS=$((PASS + 1))
+}
+
+# ---------------------------------------------------------------------------
 # Helper: compile and run a single testbench
 #   run_test <name> <vvp_path> <iverilog_args...>
 # ---------------------------------------------------------------------------
@@ -429,9 +490,9 @@ run_test "Chirp Contract" \
     tb/tb_chirp_ctr_reg.vvp \
     tb/tb_chirp_contract.v plfm_chirp_controller.v
 
-run_test "Doppler Processor (DSP48)" \
-    tb/tb_doppler_reg.vvp \
-    tb/tb_doppler_cosim.v doppler_processor.v xfft_16.v fft_engine.v
+run_doppler_cosim "stationary"   ""
+run_doppler_cosim "moving"       "-DSCENARIO_MOVING"
+run_doppler_cosim "two_targets"  "-DSCENARIO_TWO"
 
 run_test "Threshold Detector (detection bugs)" \
     tb/tb_threshold_detector.vvp \
