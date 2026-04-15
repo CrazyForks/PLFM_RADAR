@@ -24,3 +24,4 @@ test_gap3_emergency_stop_rails
 test_gap3_idq_periodic_reread
 test_gap3_iwdg_config
 test_gap3_temperature_max
+test_gap3_overtemp_emergency_stop
