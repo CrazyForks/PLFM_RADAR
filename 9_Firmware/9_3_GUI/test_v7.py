@@ -58,9 +58,9 @@ class TestRadarSettings(unittest.TestCase):
 
     def test_has_physical_conversion_fields(self):
         s = _models().RadarSettings()
-        self.assertIsInstance(s.range_resolution, float)
+        self.assertIsInstance(s.range_bin_spacing, float)
         self.assertIsInstance(s.velocity_resolution, float)
-        self.assertGreater(s.range_resolution, 0)
+        self.assertGreater(s.range_bin_spacing, 0)
         self.assertGreater(s.velocity_resolution, 0)
 
     def test_defaults(self):
@@ -436,10 +436,19 @@ class TestWaveformConfig(unittest.TestCase):
         self.assertEqual(wc.decimation_factor, 16)
 
     def test_range_resolution(self):
-        """range_resolution_m should be ~24.0 m/bin with PLFM defaults."""
+        """bin_spacing_m should be ~24.0 m/bin with PLFM defaults."""
         from v7.models import WaveformConfig
         wc = WaveformConfig()
-        self.assertAlmostEqual(wc.range_resolution_m, 23.98, places=1)
+        self.assertAlmostEqual(wc.bin_spacing_m, 23.98, places=1)
+
+    def test_range_resolution_physical(self):
+        """range_resolution_m = c/(2*BW), ~7.5 m at 20 MHz BW."""
+        from v7.models import WaveformConfig
+        wc = WaveformConfig()
+        self.assertAlmostEqual(wc.range_resolution_m, 7.49, places=1)
+        # 30 MHz BW → 5.0 m resolution
+        wc30 = WaveformConfig(bandwidth_hz=30e6)
+        self.assertAlmostEqual(wc30.range_resolution_m, 4.996, places=1)
 
     def test_velocity_resolution(self):
         """velocity_resolution_mps should be ~2.67 m/s/bin."""
@@ -448,10 +457,10 @@ class TestWaveformConfig(unittest.TestCase):
         self.assertAlmostEqual(wc.velocity_resolution_mps, 2.67, places=1)
 
     def test_max_range(self):
-        """max_range_m = range_resolution * n_range_bins."""
+        """max_range_m = bin_spacing * n_range_bins."""
         from v7.models import WaveformConfig
         wc = WaveformConfig()
-        self.assertAlmostEqual(wc.max_range_m, wc.range_resolution_m * 64, places=1)
+        self.assertAlmostEqual(wc.max_range_m, wc.bin_spacing_m * 64, places=1)
 
     def test_max_velocity(self):
         """max_velocity_mps = velocity_resolution * n_doppler_bins / 2."""
@@ -467,9 +476,9 @@ class TestWaveformConfig(unittest.TestCase):
         """Non-default parameters correctly change derived values."""
         from v7.models import WaveformConfig
         wc1 = WaveformConfig()
-        # Matched-filter: range_per_bin = c/(2*fs)*dec — proportional to 1/fs
-        wc2 = WaveformConfig(sample_rate_hz=200e6)  # double fs → halve range res
-        self.assertAlmostEqual(wc2.range_resolution_m, wc1.range_resolution_m / 2, places=2)
+        # Matched-filter: bin_spacing = c/(2*fs)*dec — proportional to 1/fs
+        wc2 = WaveformConfig(sample_rate_hz=200e6)  # double fs → halve bin spacing
+        self.assertAlmostEqual(wc2.bin_spacing_m, wc1.bin_spacing_m / 2, places=2)
 
     def test_zero_center_freq_velocity(self):
         """Zero center freq should cause ZeroDivisionError in velocity calc."""
@@ -927,7 +936,7 @@ class TestExtractTargetsFromFrame(unittest.TestCase):
         """Detection at range bin 10 → range = 10 * range_resolution."""
         from v7.processing import extract_targets_from_frame
         frame = self._make_frame(det_cells=[(10, 16)])  # dbin=16 = center → vel=0
-        targets = extract_targets_from_frame(frame, range_resolution=23.98)
+        targets = extract_targets_from_frame(frame, bin_spacing=23.98)
         self.assertEqual(len(targets), 1)
         self.assertAlmostEqual(targets[0].range, 10 * 23.98, places=1)
         self.assertAlmostEqual(targets[0].velocity, 0.0, places=2)
@@ -956,7 +965,7 @@ class TestExtractTargetsFromFrame(unittest.TestCase):
                       pitch=0.0, heading=90.0)
         frame = self._make_frame(det_cells=[(10, 16)])
         targets = extract_targets_from_frame(
-            frame, range_resolution=100.0, gps=gps)
+            frame, bin_spacing=100.0, gps=gps)
         # Should be roughly east of radar position
         self.assertAlmostEqual(targets[0].latitude, 41.9, places=2)
         self.assertGreater(targets[0].longitude, 12.5)

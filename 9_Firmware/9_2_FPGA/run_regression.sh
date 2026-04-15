@@ -254,6 +254,68 @@ run_lint_static() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: compile, run, and compare a matched-filter co-sim scenario
+#   run_mf_cosim <scenario_name> <define_flag>
+# ---------------------------------------------------------------------------
+run_mf_cosim() {
+    local name="$1"
+    local define="$2"
+    local vvp="tb/tb_mf_cosim_${name}.vvp"
+    local scenario_lower="$name"
+
+    printf "  %-45s " "MF Co-Sim ($name)"
+
+    # Compile — build command as string to handle optional define
+    local cmd="iverilog -g2001 -DSIMULATION"
+    if [[ -n "$define" ]]; then
+        cmd="$cmd $define"
+    fi
+    cmd="$cmd -o $vvp tb/tb_mf_cosim.v matched_filter_processing_chain.v fft_engine.v chirp_memory_loader_param.v"
+
+    if ! eval "$cmd" 2>/tmp/iverilog_err_$$; then
+        echo -e "${RED}COMPILE FAIL${NC}"
+        ERRORS="$ERRORS\n  MF Co-Sim ($name): compile error ($(head -1 /tmp/iverilog_err_$$))"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    # Run TB
+    local output
+    output=$(timeout 120 vvp "$vvp" 2>&1) || true
+    rm -f "$vvp"
+
+    # Check TB internal pass/fail
+    local tb_fail
+    tb_fail=$(echo "$output" | grep -Ec '^\[FAIL' || true)
+    if [[ "$tb_fail" -gt 0 ]]; then
+        echo -e "${RED}FAIL${NC} (TB internal failure)"
+        ERRORS="$ERRORS\n  MF Co-Sim ($name): TB internal failure"
+        FAIL=$((FAIL + 1))
+        return
+    fi
+
+    # Run Python compare
+    if command -v python3 >/dev/null 2>&1; then
+        local compare_out
+        local compare_rc=0
+        compare_out=$(python3 tb/cosim/compare_mf.py "$scenario_lower" 2>&1) || compare_rc=$?
+        if [[ "$compare_rc" -ne 0 ]]; then
+            echo -e "${RED}FAIL${NC} (compare_mf.py mismatch)"
+            ERRORS="$ERRORS\n  MF Co-Sim ($name): Python compare failed"
+            FAIL=$((FAIL + 1))
+            return
+        fi
+    else
+        echo -e "${YELLOW}SKIP${NC} (RTL passed, python3 not found — compare skipped)"
+        SKIP=$((SKIP + 1))
+        return
+    fi
+
+    echo -e "${GREEN}PASS${NC} (RTL + Python compare)"
+    PASS=$((PASS + 1))
+}
+
+# ---------------------------------------------------------------------------
 # Helper: compile and run a single testbench
 #   run_test <name> <vvp_path> <iverilog_args...>
 # ---------------------------------------------------------------------------
@@ -416,30 +478,14 @@ run_test "Full-Chain Real-Data (decim→Doppler, exact match)" \
     doppler_processor.v xfft_16.v fft_engine.v
 
 if [[ "$QUICK" -eq 0 ]]; then
-    # Golden generate
-    run_test "Receiver (golden generate)" \
-        tb/tb_rx_golden_reg.vvp \
-        -DGOLDEN_GENERATE \
-        tb/tb_radar_receiver_final.v radar_receiver_final.v \
-        radar_mode_controller.v tb/ad9484_interface_400m_stub.v \
-        ddc_400m.v nco_400m_enhanced.v cic_decimator_4x_enhanced.v \
-        cdc_modules.v fir_lowpass.v ddc_input_interface.v \
-        chirp_memory_loader_param.v latency_buffer.v \
-        matched_filter_multi_segment.v matched_filter_processing_chain.v \
-        range_bin_decimator.v doppler_processor.v xfft_16.v fft_engine.v \
-        rx_gain_control.v mti_canceller.v
-
-    # Golden compare
-    run_test "Receiver (golden compare)" \
-        tb/tb_rx_compare_reg.vvp \
-        tb/tb_radar_receiver_final.v radar_receiver_final.v \
-        radar_mode_controller.v tb/ad9484_interface_400m_stub.v \
-        ddc_400m.v nco_400m_enhanced.v cic_decimator_4x_enhanced.v \
-        cdc_modules.v fir_lowpass.v ddc_input_interface.v \
-        chirp_memory_loader_param.v latency_buffer.v \
-        matched_filter_multi_segment.v matched_filter_processing_chain.v \
-        range_bin_decimator.v doppler_processor.v xfft_16.v fft_engine.v \
-        rx_gain_control.v mti_canceller.v
+    # NOTE: The "Receiver golden generate/compare" pair was REMOVED because
+    # it was self-blessing: both passes ran the same RTL with the same
+    # deterministic stimulus, so the test always passed regardless of bugs.
+    # Real co-sim coverage is provided by:
+    #   - tb_doppler_realdata.v  (committed Python golden hex, exact match)
+    #   - tb_fullchain_realdata.v (committed Python golden hex, exact match)
+    # A proper full-pipeline co-sim (DDC→MF→Decim→Doppler vs Python) is
+    # planned as a replacement (Phase C of CI test plan).
 
     # Full system top (monitoring-only, legacy)
     run_test "System Top (radar_system_tb)" \
@@ -469,9 +515,25 @@ if [[ "$QUICK" -eq 0 ]]; then
         usb_data_interface.v edge_detector.v radar_mode_controller.v \
         rx_gain_control.v cfar_ca.v mti_canceller.v fpga_self_test.v
 else
-    echo "  (skipped receiver golden + system top + E2E — use without --quick)"
-    SKIP=$((SKIP + 4))
+    echo "  (skipped system top + E2E — use without --quick)"
+    SKIP=$((SKIP + 2))
 fi
+
+echo ""
+
+# ===========================================================================
+# PHASE 2b: MATCHED FILTER CO-SIMULATION (RTL vs Python golden reference)
+# Runs tb_mf_cosim.v for 4 scenarios, then compare_mf.py validates output
+# against committed Python golden CSV files. In SIMULATION mode, thresholds
+# are generous (behavioral vs fixed-point twiddles differ) — validates
+# state machine mechanics, output count, and energy sanity.
+# ===========================================================================
+echo "--- PHASE 2b: Matched Filter Co-Sim ---"
+
+run_mf_cosim "chirp"   ""
+run_mf_cosim "dc"      "-DSCENARIO_DC"
+run_mf_cosim "impulse" "-DSCENARIO_IMPULSE"
+run_mf_cosim "tone5"   "-DSCENARIO_TONE5"
 
 echo ""
 

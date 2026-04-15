@@ -27,10 +27,12 @@ layers agree (because both could be wrong).
 from __future__ import annotations
 
 import os
+import re
 import struct
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -202,6 +204,58 @@ class TestTier1OpcodeContract:
                     f"but ground truth says '{expected_reg}'"
                 )
 
+    def test_opcode_count_exact_match(self):
+        """
+        Total opcode count must match ground truth exactly.
+
+        This is a CANARY test: if an LLM agent or developer adds/removes
+        an opcode in one layer without updating ground truth, this fails
+        immediately. Update GROUND_TRUTH_OPCODES when intentionally
+        changing the register map.
+        """
+        expected_count = len(GROUND_TRUTH_OPCODES)  # 25
+        py_count = len(cp.parse_python_opcodes())
+        v_count = len(cp.parse_verilog_opcodes())
+
+        assert py_count == expected_count, (
+            f"Python has {py_count} opcodes but ground truth has {expected_count}. "
+            f"If intentional, update GROUND_TRUTH_OPCODES in this test file."
+        )
+        assert v_count == expected_count, (
+            f"Verilog has {v_count} opcodes but ground truth has {expected_count}. "
+            f"If intentional, update GROUND_TRUTH_OPCODES in this test file."
+        )
+
+    def test_no_extra_verilog_opcodes(self):
+        """
+        Verilog must not have opcodes absent from ground truth.
+
+        Catches the case where someone adds a new case entry in
+        radar_system_top.v but forgets to update the contract.
+        """
+        v_opcodes = cp.parse_verilog_opcodes()
+        extra = set(v_opcodes.keys()) - set(GROUND_TRUTH_OPCODES.keys())
+        assert not extra, (
+            f"Verilog has opcodes not in ground truth: "
+            f"{[f'0x{x:02X} ({v_opcodes[x].register})' for x in extra]}. "
+            f"Add them to GROUND_TRUTH_OPCODES if intentional."
+        )
+
+    def test_no_extra_python_opcodes(self):
+        """
+        Python must not have opcodes absent from ground truth.
+
+        Catches phantom opcodes (like the 0x06 incident) added by
+        LLM agents that assume without verifying.
+        """
+        py_opcodes = cp.parse_python_opcodes()
+        extra = set(py_opcodes.keys()) - set(GROUND_TRUTH_OPCODES.keys())
+        assert not extra, (
+            f"Python has opcodes not in ground truth: "
+            f"{[f'0x{x:02X} ({py_opcodes[x].name})' for x in extra]}. "
+            f"Remove phantom opcodes or add to GROUND_TRUTH_OPCODES."
+        )
+
 
 class TestTier1BitWidths:
     """Verify register widths and opcode bit slices match ground truth."""
@@ -297,6 +351,122 @@ class TestTier1StatusFieldPositions:
         assert actual_shift == expected_shift, (
             f"Python reads radar_mode at bit {actual_shift} "
             f"but Verilog status_words[0] has mode at bit {expected_shift}."
+        )
+
+
+class TestTier1ArchitecturalParams:
+    """
+    Verify radar_params.vh (FPGA single source of truth) matches Python
+    WaveformConfig defaults and frozen architectural constants.
+
+    These tests catch:
+    - LLM agents changing FFT size, bin counts, or sample rates in one
+      layer without updating the other
+    - Accidental parameter drift between FPGA and GUI
+    - Unauthorized changes to critical architectural constants
+
+    When intentionally changing a parameter (e.g. FFT 1024→2048),
+    update BOTH radar_params.vh AND WaveformConfig, then update the
+    FROZEN_PARAMS dict below.
+    """
+
+    # Frozen architectural constants — update deliberately when changing arch
+    FROZEN_PARAMS: ClassVar[dict[str, int]] = {
+        "RP_FFT_SIZE": 1024,
+        "RP_DECIMATION_FACTOR": 16,
+        "RP_BINS_PER_SEGMENT": 64,
+        "RP_OUTPUT_RANGE_BINS_3KM": 64,
+        "RP_DOPPLER_FFT_SIZE": 16,
+        "RP_NUM_DOPPLER_BINS": 32,
+        "RP_CHIRPS_PER_FRAME": 32,
+        "RP_CHIRPS_PER_SUBFRAME": 16,
+        "RP_DATA_WIDTH": 16,
+        "RP_PROCESSING_RATE_MHZ": 100,
+        "RP_RANGE_PER_BIN_DM": 240,      # 24.0 m in decimeters
+    }
+
+    def test_radar_params_vh_parseable(self):
+        """radar_params.vh must exist and parse without error."""
+        params = cp.parse_radar_params_vh()
+        assert len(params) > 10, (
+            f"Only parsed {len(params)} defines from radar_params.vh — "
+            f"expected > 10. Parser may be broken."
+        )
+
+    def test_frozen_constants_unchanged(self):
+        """
+        Critical architectural constants must match frozen values.
+
+        If this test fails, someone changed a fundamental parameter.
+        Verify the change is intentional, update FROZEN_PARAMS, AND
+        update all downstream consumers (GUI, testbenches, docs).
+        """
+        params = cp.parse_radar_params_vh()
+        for name, expected in self.FROZEN_PARAMS.items():
+            assert name in params, (
+                f"{name} missing from radar_params.vh! "
+                f"Was it renamed or removed?"
+            )
+            assert params[name] == expected, (
+                f"ARCHITECTURAL CHANGE DETECTED: {name} = {params[name]}, "
+                f"expected {expected}. If intentional, update FROZEN_PARAMS "
+                f"in this test AND all downstream consumers."
+            )
+
+    def test_fpga_python_fft_size_match(self):
+        """FPGA FFT size must match Python WaveformConfig.fft_size."""
+        params = cp.parse_radar_params_vh()
+        sys.path.insert(0, str(cp.GUI_DIR))
+        from v7.models import WaveformConfig
+        wc = WaveformConfig()
+        assert params["RP_FFT_SIZE"] == wc.fft_size, (
+            f"FFT size mismatch: radar_params.vh={params['RP_FFT_SIZE']}, "
+            f"WaveformConfig={wc.fft_size}"
+        )
+
+    def test_fpga_python_decimation_match(self):
+        """FPGA decimation factor must match Python WaveformConfig."""
+        params = cp.parse_radar_params_vh()
+        sys.path.insert(0, str(cp.GUI_DIR))
+        from v7.models import WaveformConfig
+        wc = WaveformConfig()
+        assert params["RP_DECIMATION_FACTOR"] == wc.decimation_factor, (
+            f"Decimation mismatch: radar_params.vh={params['RP_DECIMATION_FACTOR']}, "
+            f"WaveformConfig={wc.decimation_factor}"
+        )
+
+    def test_fpga_python_range_bins_match(self):
+        """FPGA 3km output bins must match Python WaveformConfig.n_range_bins."""
+        params = cp.parse_radar_params_vh()
+        sys.path.insert(0, str(cp.GUI_DIR))
+        from v7.models import WaveformConfig
+        wc = WaveformConfig()
+        assert params["RP_OUTPUT_RANGE_BINS_3KM"] == wc.n_range_bins, (
+            f"Range bins mismatch: radar_params.vh={params['RP_OUTPUT_RANGE_BINS_3KM']}, "
+            f"WaveformConfig={wc.n_range_bins}"
+        )
+
+    def test_fpga_python_doppler_bins_match(self):
+        """FPGA Doppler bins must match Python WaveformConfig.n_doppler_bins."""
+        params = cp.parse_radar_params_vh()
+        sys.path.insert(0, str(cp.GUI_DIR))
+        from v7.models import WaveformConfig
+        wc = WaveformConfig()
+        assert params["RP_NUM_DOPPLER_BINS"] == wc.n_doppler_bins, (
+            f"Doppler bins mismatch: radar_params.vh={params['RP_NUM_DOPPLER_BINS']}, "
+            f"WaveformConfig={wc.n_doppler_bins}"
+        )
+
+    def test_fpga_python_sample_rate_match(self):
+        """FPGA processing rate must match Python WaveformConfig.sample_rate_hz."""
+        params = cp.parse_radar_params_vh()
+        sys.path.insert(0, str(cp.GUI_DIR))
+        from v7.models import WaveformConfig
+        wc = WaveformConfig()
+        fpga_rate_hz = params["RP_PROCESSING_RATE_MHZ"] * 1e6
+        assert fpga_rate_hz == wc.sample_rate_hz, (
+            f"Sample rate mismatch: radar_params.vh={fpga_rate_hz/1e6} MHz, "
+            f"WaveformConfig={wc.sample_rate_hz/1e6} MHz"
         )
 
 
@@ -825,4 +995,108 @@ class TestTier3CStub:
 
         assert result.get("parse_ok") == "true", (
             f"Boundary values rejected: {result}"
+        )
+
+
+# ===================================================================
+# TIER 4: Stale Value Detection (LLM Agent Guardrails)
+# ===================================================================
+
+class TestTier4BannedPatterns:
+    """
+    Scan source files for known-wrong values that have been corrected.
+
+    These patterns are stale ADI Phaser defaults, wrong sample rates,
+    and incorrect range calculations that were cleaned up in commit
+    d259e5c. If an LLM agent reintroduces them, this test catches it.
+
+    IMPORTANT: Allowlist entries exist for legitimate uses (e.g. comments
+    explaining what was wrong, test files checking for these values).
+    """
+
+    # (regex_pattern, description, file_extensions_to_scan)
+    BANNED_PATTERNS: ClassVar[list[tuple[str, str, tuple[str, ...]]]] = [
+        # Wrong carrier frequency (ADI Phaser default, not PLFM)
+        (r'10[._]?525\s*e\s*9|10\.525\s*GHz|10525000000',
+         "Stale ADI Phaser carrier freq — PLFM uses 10.5 GHz",
+         ("*.py", "*.v", "*.vh", "*.cpp", "*.h")),
+
+        # Wrong post-DDC sample rate (ADI Phaser uses 4 MSPS)
+        (r'(?<!\d)4e6(?!\d)|4_?000_?000\.0?\s*#.*(?:sample|samp|rate|fs)',
+         "Stale ADI 4 MSPS rate — PLFM post-DDC is 100 MSPS",
+         ("*.py",)),
+
+        # Wrong range per bin values from old calculations
+        (r'(?<!\d)4\.8\s*(?:m/bin|m per|meters?\s*per)',
+         "Stale bin spacing 4.8 m — PLFM is 24.0 m/bin",
+         ("*.py", "*.cpp")),
+
+        (r'(?<!\d)5\.6\s*(?:m/bin|m per|meters?\s*per)',
+         "Stale bin spacing 5.6 m — PLFM is 24.0 m/bin",
+         ("*.py", "*.cpp")),
+
+        # Wrong range resolution from deramped FMCW formula
+        (r'781\.25',
+         "Stale ADI range value 781.25 — not applicable to PLFM",
+         ("*.py",)),
+    ]
+
+    # Files that are allowed to contain banned patterns
+    # (this test file, historical docs, comparison scripts)
+    # ADI co-sim files legitimately reference ADI Phaser hardware params
+    # because they process ADI test stimulus data (10.525 GHz, 4 MSPS).
+    ALLOWLIST: ClassVar[set[str]] = {
+        "test_cross_layer_contract.py",  # This file — contains the patterns!
+        "CLAUDE.md",                     # Context doc may reference old values
+        "golden_reference.py",           # Processes ADI Phaser test data
+        "tb_fullchain_mti_cfar_realdata.v",  # $display of ADI test stimulus info
+        "tb_doppler_realdata.v",             # $display of ADI test stimulus info
+        "tb_range_fft_realdata.v",           # $display of ADI test stimulus info
+        "tb_fullchain_realdata.v",           # $display of ADI test stimulus info
+    }
+
+    def _scan_files(self, pattern_re, extensions):
+        """Scan firmware source files for a regex pattern."""
+        hits = []
+        firmware_dir = cp.REPO_ROOT / "9_Firmware"
+
+        for ext in extensions:
+            for fpath in firmware_dir.rglob(ext.replace("*", "**/*") if "**" in ext else ext):
+                # Skip allowlisted files
+                if fpath.name in self.ALLOWLIST:
+                    continue
+                # Skip __pycache__, .git, etc.
+                parts = set(fpath.parts)
+                if parts & {"__pycache__", ".git", ".venv", "venv", ".ruff_cache"}:
+                    continue
+
+                try:
+                    text = fpath.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+
+                for i, line in enumerate(text.splitlines(), 1):
+                    if pattern_re.search(line):
+                        hits.append(f"{fpath.relative_to(cp.REPO_ROOT)}:{i}: {line.strip()[:120]}")
+
+        return hits
+
+    def test_no_banned_stale_values(self):
+        """
+        No source file should contain known-wrong stale values.
+
+        If this fails, an LLM agent likely reintroduced a corrected value.
+        Check the flagged lines and fix them. If a line is a legitimate
+        use (e.g. a comment explaining history), add the file to ALLOWLIST.
+        """
+        all_hits = []
+        for pattern_str, description, extensions in self.BANNED_PATTERNS:
+            pattern_re = re.compile(pattern_str, re.IGNORECASE)
+            hits = self._scan_files(pattern_re, extensions)
+            all_hits.extend(f"[{description}] {hit}" for hit in hits)
+
+        assert not all_hits, (
+            f"Found {len(all_hits)} stale/banned value(s) in source files:\n"
+            + "\n".join(f"  {h}" for h in all_hits[:20])
+            + ("\n  ... and more" if len(all_hits) > 20 else "")
         )

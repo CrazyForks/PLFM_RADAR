@@ -105,11 +105,11 @@ class RadarSettings:
     tab and Opcode enum in radar_protocol.py.  This dataclass holds only
     host-side display/map settings and physical-unit conversion factors.
 
-    range_resolution and velocity_resolution should be calibrated to
+    range_bin_spacing and velocity_resolution should be calibrated to
     the actual waveform parameters.
     """
     system_frequency: float = 10.5e9    # Hz (PLFM TX LO, verified from ADF4382 config)
-    range_resolution: float = 24.0     # Meters per decimated range bin (c/(2*100MSPS)*16)
+    range_bin_spacing: float = 24.0    # Meters per decimated range bin (c/(2*100MSPS)*16)
     velocity_resolution: float = 2.67  # m/s per Doppler bin (lam/(2*32*167us))
     max_distance: float = 1536         # Max detection range (m) -- 64 bins x 24 m (3 km mode)
     map_size: float = 1536             # Map display size (m)
@@ -216,17 +216,29 @@ class WaveformConfig:
     decimation_factor: int = 16          # 1024 → 64
 
     @property
-    def range_resolution_m(self) -> float:
+    def bin_spacing_m(self) -> float:
         """Meters per decimated range bin (matched-filter receiver).
 
         For matched-filter pulse compression: bin spacing = c / (2 * fs).
         After decimation the bin spacing grows by *decimation_factor*.
-        This is independent of chirp bandwidth (BW affects resolution, not
-        bin spacing).
+        This is independent of chirp bandwidth (BW affects physical
+        resolution, not bin spacing).
         """
         c = 299_792_458.0
         raw_bin = c / (2.0 * self.sample_rate_hz)
         return raw_bin * self.decimation_factor
+
+    @property
+    def range_resolution_m(self) -> float:
+        """Physical range resolution in meters, set by chirp bandwidth.
+
+        range_resolution = c / (2 * BW).
+        At 20 MHz BW → 7.5 m; at 30 MHz BW → 5.0 m.
+        This is distinct from bin_spacing_m (which depends on sample rate
+        and decimation factor, not bandwidth).
+        """
+        c = 299_792_458.0
+        return c / (2.0 * self.bandwidth_hz)
 
     @property
     def velocity_resolution_mps(self) -> float:
@@ -238,7 +250,7 @@ class WaveformConfig:
     @property
     def max_range_m(self) -> float:
         """Maximum unambiguous range in meters."""
-        return self.range_resolution_m * self.n_range_bins
+        return self.bin_spacing_m * self.n_range_bins
 
     @property
     def max_velocity_mps(self) -> float:

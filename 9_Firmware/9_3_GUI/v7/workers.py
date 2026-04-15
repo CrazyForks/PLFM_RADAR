@@ -169,7 +169,7 @@ class RadarDataWorker(QThread):
         The FPGA already does: FFT, MTI, CFAR, DC notch.
         Host-side DSP adds: clustering, tracking, geo-coordinate mapping.
 
-        Bin-to-physical conversion uses RadarSettings.range_resolution
+        Bin-to-physical conversion uses RadarSettings.range_bin_spacing
         and velocity_resolution (should be calibrated to actual waveform).
         """
         targets: list[RadarTarget] = []
@@ -180,7 +180,7 @@ class RadarDataWorker(QThread):
 
         # Extract detections from FPGA CFAR flags
         det_indices = np.argwhere(frame.detections > 0)
-        r_res = self._settings.range_resolution
+        r_res = self._settings.range_bin_spacing
         v_res = self._settings.velocity_resolution
 
         for idx in det_indices:
@@ -559,7 +559,7 @@ class ReplayWorker(QThread):
         # Target extraction
         targets = self._extract_targets(
             frame,
-            range_resolution=self._waveform.range_resolution_m,
+            bin_spacing=self._waveform.bin_spacing_m,
             velocity_resolution=self._waveform.velocity_resolution_mps,
             gps=self._gps,
         )

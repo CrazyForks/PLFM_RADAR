@@ -490,7 +490,7 @@ def polar_to_geographic(
 
 def extract_targets_from_frame(
     frame,
-    range_resolution: float = 1.0,
+    bin_spacing: float = 1.0,
     velocity_resolution: float = 1.0,
     gps: GPSData | None = None,
 ) -> list[RadarTarget]:
@@ -503,8 +503,8 @@ def extract_targets_from_frame(
     ----------
     frame : RadarFrame
         Frame with populated ``detections``, ``magnitude``, ``range_doppler_i/q``.
-    range_resolution : float
-        Meters per range bin.
+    bin_spacing : float
+        Meters per range bin (bin spacing, NOT bandwidth-limited resolution).
     velocity_resolution : float
         m/s per Doppler bin.
     gps : GPSData | None
@@ -525,7 +525,7 @@ def extract_targets_from_frame(
         mag = float(frame.magnitude[rbin, dbin])
         snr = 10.0 * math.log10(max(mag, 1.0)) if mag > 0 else 0.0
 
-        range_m = float(rbin) * range_resolution
+        range_m = float(rbin) * bin_spacing
         velocity_ms = float(dbin - doppler_center) * velocity_resolution
 
         lat, lon, azimuth, elevation = 0.0, 0.0, 0.0, 0.0

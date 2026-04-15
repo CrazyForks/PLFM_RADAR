@@ -793,3 +793,51 @@ def parse_stm32_gpio_init(filepath: Path | None = None) -> list[GpioPin]:
                 ))
 
     return pins
+
+
+# ===================================================================
+# FPGA radar_params.vh parser
+# ===================================================================
+
+def parse_radar_params_vh() -> dict[str, int]:
+    """
+    Parse `define values from radar_params.vh.
+
+    Returns dict like {"RP_FFT_SIZE": 1024, "RP_DECIMATION_FACTOR": 16, ...}.
+    Only parses defines with simple integer or Verilog literal values.
+    Skips bit-width prefixed literals (e.g. 2'b00) — returns the numeric value.
+    """
+    path = FPGA_DIR / "radar_params.vh"
+    text = path.read_text()
+    params: dict[str, int] = {}
+
+    for m in re.finditer(
+        r'`define\s+(RP_\w+)\s+(\S+)', text
+    ):
+        name = m.group(1)
+        val_str = m.group(2).rstrip()
+
+        # Skip non-numeric defines (like RADAR_PARAMS_VH guard)
+        if name == "RADAR_PARAMS_VH":
+            continue
+
+        # Handle Verilog bit-width literals: 2'b00, 8'h30, etc.
+        verilog_lit = re.match(r"\d+'([bhd])(\w+)", val_str)
+        if verilog_lit:
+            base_char = verilog_lit.group(1)
+            digits = verilog_lit.group(2)
+            base = {"b": 2, "h": 16, "d": 10}[base_char]
+            params[name] = int(digits, base)
+            continue
+
+        # Handle parenthesized expressions like (`RP_X * `RP_Y)
+        if "(" in val_str or "`" in val_str:
+            continue  # Skip computed defines
+
+        # Plain integer
+        try:
+            params[name] = int(val_str)
+        except ValueError:
+            continue
+
+    return params

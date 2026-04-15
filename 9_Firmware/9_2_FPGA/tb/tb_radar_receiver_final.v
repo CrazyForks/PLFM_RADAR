@@ -7,43 +7,21 @@
 //     -> matched_filter_multi_segment -> range_bin_decimator
 //     -> doppler_processor_optimized -> doppler_output
 //
-// ============================================================================
-// TWO MODES (compile-time define):
-//
-//   1. GOLDEN_GENERATE mode  (-DGOLDEN_GENERATE):
-//      Dumps all Doppler output samples to golden reference files.
-//      Run once on known-good RTL:
-//        iverilog -g2001 -DSIMULATION -DGOLDEN_GENERATE -o tb_golden_gen.vvp \
-//          <src files> tb/tb_radar_receiver_final.v
-//        mkdir -p tb/golden
-//        vvp tb_golden_gen.vvp
-//
-//   2. Default mode (no GOLDEN_GENERATE):
-//      Loads golden files, compares each Doppler output against reference,
-//      and runs physics-based bounds checks.
-//        iverilog -g2001 -DSIMULATION -o tb_radar_receiver_final.vvp \
-//          <src files> tb/tb_radar_receiver_final.v
-//        vvp tb_radar_receiver_final.vvp
-//
-// PREREQUISITES:
-//   - The directory tb/golden/ must exist before running either mode.
-//     Create it with: mkdir -p tb/golden
-//
 // TAP POINTS:
 //   Tap 1 (DDC output)     - bounds checking only (CDC jitter -> non-deterministic)
 //     Signals: dut.ddc_out_i [17:0], dut.ddc_out_q [17:0], dut.ddc_valid_i
-//   Tap 2 (Doppler output) - golden compared (deterministic after MF buffering)
+//   Tap 2 (Doppler output) - structural + bounds checks (deterministic after MF)
 //     Signals: doppler_output[31:0], doppler_valid, doppler_bin[4:0],
 //              range_bin_out[5:0]
-//
-// Golden file: tb/golden/golden_doppler.mem
-//   2048 entries of 32-bit hex, indexed by range_bin*32 + doppler_bin
 //
 // Strategy:
 //   - Uses behavioral stub for ad9484_interface_400m (no Xilinx primitives)
 //   - Overrides radar_mode_controller timing params for fast simulation
 //   - Feeds 120 MHz tone at ADC input (IF frequency -> DDC passband)
-//   - Verifies structural correctness + golden comparison + bounds checks
+//   - Verifies structural correctness (S1-S10) + physics bounds checks (B1-B5)
+//   - Bit-accurate golden comparison is done by the MF co-sim tests
+//     (tb_mf_cosim.v + compare_mf.py) and full-chain co-sim tests
+//     (tb_doppler_realdata.v, tb_fullchain_realdata.v), not here.
 //
 // Convention: check task, VCD dump, CSV output, pass/fail summary
 // ============================================================================
@@ -195,46 +173,6 @@ task check;
 endtask
 
 // ============================================================================
-// GOLDEN MEMORY DECLARATIONS AND LOAD/STORE LOGIC
-// ============================================================================
-localparam GOLDEN_ENTRIES   = 2048;  // 64 range bins * 32 Doppler bins
-localparam GOLDEN_TOLERANCE = 2;     // +/- 2 LSB tolerance for comparison
-
-reg [31:0] golden_doppler [0:2047];
-
-// -- Golden comparison tracking --
-integer golden_match_count;
-integer golden_mismatch_count;
-integer golden_max_err_i;
-integer golden_max_err_q;
-integer golden_compare_count;
-
-`ifdef GOLDEN_GENERATE
-    // In generate mode, we just initialize the array to X/0
-    // and fill it as outputs arrive
-    integer gi;
-    initial begin
-        for (gi = 0; gi < GOLDEN_ENTRIES; gi = gi + 1)
-            golden_doppler[gi] = 32'd0;
-        golden_match_count   = 0;
-        golden_mismatch_count = 0;
-        golden_max_err_i     = 0;
-        golden_max_err_q     = 0;
-        golden_compare_count = 0;
-    end
-`else
-    // In comparison mode, load the golden reference
-    initial begin
-        $readmemh("tb/golden/golden_doppler.mem", golden_doppler);
-        golden_match_count   = 0;
-        golden_mismatch_count = 0;
-        golden_max_err_i     = 0;
-        golden_max_err_q     = 0;
-        golden_compare_count = 0;
-    end
-`endif
-
-// ============================================================================
 // DDC ENERGY ACCUMULATOR (Bounds Check B1)
 // ============================================================================
 // Accumulate I^2 + Q^2 for all DDC valid samples. 64-bit to avoid overflow.
@@ -257,7 +195,7 @@ always @(posedge clk_100m) begin
 end
 
 // ============================================================================
-// DOPPLER OUTPUT CAPTURE, GOLDEN COMPARISON, AND DUPLICATE DETECTION
+// DOPPLER OUTPUT CAPTURE AND DUPLICATE DETECTION
 // ============================================================================
 integer doppler_output_count;
 integer doppler_frame_count;
@@ -311,13 +249,6 @@ end
 // Monitor doppler outputs -- only after reset released
 always @(posedge clk_100m) begin
     if (reset_n && doppler_valid) begin : doppler_capture_block
-        // ---- Signed intermediates for golden comparison ----
-        reg signed [16:0] actual_i, actual_q;
-        reg signed [16:0] expected_i, expected_q;
-        reg signed [16:0] err_i_signed, err_q_signed;
-        integer abs_err_i, abs_err_q;
-        integer gidx;
-        reg [31:0] expected_val;
         // ---- Magnitude intermediates for B2 ----
         reg signed [16:0] mag_i_signed, mag_q_signed;
         integer mag_i, mag_q, mag_sum;
@@ -350,9 +281,6 @@ always @(posedge clk_100m) begin
         if ((doppler_output_count % 256) == 0)
             $display("[INFO] %0d doppler outputs so far (t=%0t)", doppler_output_count, $time);
 
-        // ---- Golden index computation ----
-        gidx = range_bin_out * 32 + doppler_bin;
-
         // ---- Duplicate detection (B5) ----
         if (range_bin_out < 64 && doppler_bin < 32) begin
             if (index_seen[range_bin_out][doppler_bin]) begin
@@ -376,44 +304,6 @@ always @(posedge clk_100m) begin
             if (mag_sum > peak_dbin_mag[range_bin_out])
                 peak_dbin_mag[range_bin_out] = mag_sum;
         end
-
-`ifdef GOLDEN_GENERATE
-        // ---- GOLDEN GENERATE: store output ----
-        if (gidx < GOLDEN_ENTRIES)
-            golden_doppler[gidx] = doppler_output;
-`else
-        // ---- GOLDEN COMPARE: check against reference ----
-        if (gidx < GOLDEN_ENTRIES) begin
-            expected_val = golden_doppler[gidx];
-
-            actual_i   = $signed(doppler_output[15:0]);
-            actual_q   = $signed(doppler_output[31:16]);
-            expected_i = $signed(expected_val[15:0]);
-            expected_q = $signed(expected_val[31:16]);
-
-            err_i_signed = actual_i - expected_i;
-            err_q_signed = actual_q - expected_q;
-
-            abs_err_i = (err_i_signed < 0) ? -err_i_signed : err_i_signed;
-            abs_err_q = (err_q_signed < 0) ? -err_q_signed : err_q_signed;
-
-            golden_compare_count = golden_compare_count + 1;
-
-            if (abs_err_i > golden_max_err_i) golden_max_err_i = abs_err_i;
-            if (abs_err_q > golden_max_err_q) golden_max_err_q = abs_err_q;
-
-            if (abs_err_i <= GOLDEN_TOLERANCE && abs_err_q <= GOLDEN_TOLERANCE) begin
-                golden_match_count = golden_match_count + 1;
-            end else begin
-                golden_mismatch_count = golden_mismatch_count + 1;
-                if (golden_mismatch_count <= 20)
-                    $display("[MISMATCH] idx=%0d rbin=%0d dbin=%0d actual=%08h expected=%08h err_i=%0d err_q=%0d",
-                             gidx, range_bin_out, doppler_bin,
-                             doppler_output, expected_val,
-                             abs_err_i, abs_err_q);
-            end
-        end
-`endif
     end
 
     // Track frame completions via doppler_proc -- only after reset
@@ -556,13 +446,6 @@ initial begin
         end
     end
 
-    // ---- DUMP GOLDEN FILE (generate mode only) ----
-`ifdef GOLDEN_GENERATE
-    $writememh("tb/golden/golden_doppler.mem", golden_doppler);
-    $display("[GOLDEN_GENERATE] Wrote tb/golden/golden_doppler.mem (%0d entries captured)",
-             doppler_output_count);
-`endif
-
     // ================================================================
     // RUN CHECKS
     // ================================================================
@@ -649,33 +532,7 @@ initial begin
           "S10: DDC produced substantial output (>100 valid samples)");
 
     // ================================================================
-    // GOLDEN COMPARISON REPORT
-    // ================================================================
-`ifdef GOLDEN_GENERATE
-    $display("");
-    $display("Golden comparison:  SKIPPED (GOLDEN_GENERATE mode)");
-    $display("  Wrote golden reference with %0d Doppler samples", doppler_output_count);
-`else
-    $display("");
-    $display("------------------------------------------------------------");
-    $display("GOLDEN COMPARISON (tolerance=%0d LSB)", GOLDEN_TOLERANCE);
-    $display("------------------------------------------------------------");
-    $display("Golden comparison:  %0d/%0d match (tolerance=%0d LSB)",
-             golden_match_count, golden_compare_count, GOLDEN_TOLERANCE);
-    $display("  Mismatches: %0d (I-ch max_err=%0d, Q-ch max_err=%0d)",
-             golden_mismatch_count, golden_max_err_i, golden_max_err_q);
-
-    // CHECK G1: All golden comparisons match
-    if (golden_compare_count > 0) begin
-        check(golden_mismatch_count == 0,
-              "G1: All Doppler outputs match golden reference within tolerance");
-    end else begin
-        check(0, "G1: All Doppler outputs match golden reference (NO COMPARISONS)");
-    end
-`endif
-
-    // ================================================================
-    // BOUNDS CHECKS (active in both modes)
+    // BOUNDS CHECKS
     // ================================================================
     $display("");
     $display("------------------------------------------------------------");
@@ -748,16 +605,8 @@ initial begin
     // ================================================================
     $display("");
     $display("============================================================");
-    $display("INTEGRATION TEST -- GOLDEN COMPARISON + BOUNDS");
+    $display("INTEGRATION TEST -- STRUCTURAL + BOUNDS");
     $display("============================================================");
-`ifdef GOLDEN_GENERATE
-    $display("Mode: GOLDEN_GENERATE (reference dump, comparison skipped)");
-`else
-    $display("Golden comparison:  %0d/%0d match (tolerance=%0d LSB)",
-             golden_match_count, golden_compare_count, GOLDEN_TOLERANCE);
-    $display("  Mismatches: %0d (I-ch max_err=%0d, Q-ch max_err=%0d)",
-             golden_mismatch_count, golden_max_err_i, golden_max_err_q);
-`endif
     $display("Bounds checks:");
     $display("  B1: DDC RMS energy in range [%0d, %0d]",
              (ddc_energy_acc > 0) ? 1 : 0, DDC_MAX_ENERGY);
