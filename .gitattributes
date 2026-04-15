@@ -1,0 +1,21 @@
+# Enforce LF line endings for all text files going forward.
+# Existing CRLF files are left as-is to avoid polluting git blame.
+* text=auto eol=lf
+
+# Binary files — ensure git doesn't mangle these
+*.npy binary
+*.h5 binary
+*.hdf5 binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.zip binary
+*.bin binary
+*.mem binary
+*.hex binary
+*.vvp binary
+*.s2p binary
+*.s3p binary
+*.step binary
+*.FCStd binary
+*.FCBak binary
